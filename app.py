@@ -150,7 +150,7 @@ def extract_from_pptx(upload, months_back):
     return df
 
 # === Streamlit UI ===
-st.title("\U0001F4CA PowerPoint Patent Extractor")
+st.title("\U0001F4CA DocketPoint")
 # === Sidebar Branding ===
 st.sidebar.image("firm_logo.png", use_container_width=True)
 st.sidebar.markdown("---")
