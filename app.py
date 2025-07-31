@@ -151,6 +151,10 @@ def extract_from_pptx(upload, months_back):
 
 # === Streamlit UI ===
 st.title("\U0001F4CA PowerPoint Patent Extractor")
+# === Sidebar Branding ===
+st.sidebar.image("firm_logo.png", use_container_width=True)
+st.sidebar.markdown("---")
+# === Upload ===
 ppt_files = st.file_uploader("Upload one or more PowerPoint (.pptx) files", type="pptx", accept_multiple_files=True)
 months_back = st.slider("Include due dates up to this many months in the past:", 0, 24, 0)
 
