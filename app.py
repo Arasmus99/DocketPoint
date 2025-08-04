@@ -153,7 +153,19 @@ def extract_from_pptx(upload, months_back):
 st.title("\U0001F4CA DocketPoint")
 # === Sidebar Branding ===
 st.sidebar.image("firm_logo.png", use_container_width=True)
+# === App Description ===
 st.sidebar.markdown("---")
+st.sidebar.markdown(
+    """
+    **About DocketPoint**
+
+    This tool extracts docket numbers, application numbers, and due dates from PowerPoint files.  
+    It helps organize patent prosecution data and export it to Excel for streamlined docket tracking.  
+    Use the slider to filter by due date range.
+    """
+)
+st.sidebar.markdown("---")
+
 # === Upload ===
 ppt_files = st.file_uploader("Upload one or more PowerPoint (.pptx) files", type="pptx", accept_multiple_files=True)
 months_back = st.slider("Include due dates up to this many months in the past:", 0, 24, 0)
