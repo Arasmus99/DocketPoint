@@ -57,21 +57,39 @@ def get_earliest_due_date(dates_str):
     except:
         return pd.NaT
 
-def extract_action_from_raw_text(entry):
-    """Extracts the action (text before date) from raw_text for a given due_date."""
+def extract_action_and_dates_from_raw_text(entry):
     raw_lines = entry["raw_text"].splitlines()
+    due_date = None
+    extension_date = None
+    action = ""
+
     for line in raw_lines:
-        if entry["due_date"] in line:
-            return line.split(entry["due_date"])[0].strip()
-        # Try fuzzy matching if reformatted date isn't found
-        for match in PATTERNS["date"].findall(line):
-            try:
-                parsed = parse(match, dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-                if parsed == entry["due_date"]:
-                    return line.split(match)[0].strip()
-            except:
-                continue
-    return ""
+        line_lower = line.lower()
+
+        # Only check lines with both a date and "due"
+        if "due" in line_lower:
+            all_dates = PATTERNS["date"].findall(line)
+            if all_dates:
+                try:
+                    # Date after "due"
+                    due_pos = line_lower.find("due")
+                    after_due = line[due_pos:]
+                    due_match = PATTERNS["date"].search(after_due)
+                    if due_match:
+                        due_date = parse(due_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
+                        action = line.split(due_match.group())[0].strip()
+
+                    # Extension date after "ext" or "extension"
+                    if "ext" in line_lower or "extension" in line_lower:
+                        ext_pos = line_lower.find("ext")
+                        after_ext = line[ext_pos:]
+                        ext_match = PATTERNS["date"].search(after_ext)
+                        if ext_match:
+                            extension_date = parse(ext_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
+                except:
+                    continue
+
+    return action, due_date, extension_date
 
 def extract_entries_from_textbox(text, months_back=0):
     entries = []
@@ -143,7 +161,11 @@ def extract_from_pptx(upload, months_back):
                 entries = extract_entries_from_textbox(text, months_back)
                 for entry in entries:
                     entry["slide"] = slide_num
-                    entry["Action"] = extract_action_from_raw_text(entry)
+                    action, corrected_due, extension = extract_action_and_dates_from_raw_text(entry)
+                    entry["Action"] = action
+                    entry["Extension"] = extension
+                    entry["due_date"] = corrected_due or entry["due_date"]
+
                     results.append({
                         "Slide": entry["slide"],
                         "Textbox Content": entry["raw_text"],
@@ -152,13 +174,14 @@ def extract_from_pptx(upload, months_back):
                         "PCT Number": entry["pct_number"],
                         "WIPO Number": entry["wipo_number"],
                         "Action": entry["Action"],
-                        "Due Date": entry["due_date"]
+                        "Due Date": entry["due_date"],
+                        "Extension": entry["Extension"]
                     })
 
     if not results:
         return pd.DataFrame(columns=[
             "Slide", "Textbox Content", "Docket Number", "Application Number",
-            "PCT Number", "WIPO Number", "Due Date", "Action"
+            "PCT Number", "WIPO Number", "Due Date", "Action", "Extension"
         ])
 
     df = pd.DataFrame(results)
