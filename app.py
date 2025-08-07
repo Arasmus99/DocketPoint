@@ -56,29 +56,33 @@ def extract_action_and_dates_from_raw_text(entry):
     for line in raw_lines:
         line_lower = line.lower()
 
-        # If the line has "due" and "ext"/"extension", extract due + extension
         if "due" in line_lower:
             try:
+                # Extract action from the first date in the line
+                date_match = PATTERNS["date"].search(line)
+                if date_match:
+                    action = line.split(date_match.group())[0].strip()
+
+                # If 'ext' or 'extension' is present, this is a valid due + extension scenario
                 if "ext" in line_lower or "extension" in line_lower:
                     due_pos = line_lower.find("due")
                     after_due = line[due_pos:]
                     due_match = PATTERNS["date"].search(after_due)
                     if due_match:
                         due_date = parse(due_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-                        action = line.split(due_match.group())[0].strip()
 
                     ext_pos = line_lower.find("ext")
                     after_ext = line[ext_pos:]
                     ext_match = PATTERNS["date"].search(after_ext)
                     if ext_match:
                         extension_date = parse(ext_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-                else:
-                    # Only allow "due" to trigger due_date extraction if there are trusted keywords
-                    if any(kw in line_lower for kw in ["last day to pay", "deadline", "final date"]):
-                        due_match = PATTERNS["date"].search(line)
-                        if due_match:
-                            due_date = parse(due_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-                            action = line.split(due_match.group())[0].strip()
+
+                # If 'ext' not found, only assign due date if trusted keywords are present
+                elif any(kw in line_lower for kw in ["last day to pay", "deadline", "final date"]):
+                    trusted_due_match = PATTERNS["date"].search(line)
+                    if trusted_due_match:
+                        due_date = parse(trusted_due_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
+
             except:
                 continue
 
