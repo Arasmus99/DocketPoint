@@ -104,3 +104,45 @@ def extract_from_pptx(pptx_folder):
                         all_entries.extend(entries)
 
     return pd.DataFrame(all_entries)
+
+# === Streamlit UI ===
+st.title("\U0001F4CA DocketPoint")
+
+st.sidebar.image("firm_logo.png", use_container_width=True)
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    """
+    **About DocketPoint**
+
+    This tool extracts docket numbers, application numbers, and due dates from PowerPoint files.  
+    It helps organize patent prosecution data and export it to Excel for streamlined docket tracking.  
+    Use the slider to filter by due date range.
+    """
+)
+st.sidebar.markdown("---")
+
+ppt_files = st.file_uploader("Upload one or more PowerPoint (.pptx) files", type="pptx", accept_multiple_files=True)
+months_back = st.slider("Include due dates up to this many months in the past:", 0, 24, 0)
+
+if ppt_files:
+    all_dfs = []
+    for ppt_file in ppt_files:
+        df = extract_from_pptx(ppt_file, months_back)
+        if df.empty:
+            st.warning(f"⚠️ No extractable data found in {ppt_file.name}.")
+            continue
+        df["Filename"] = ppt_file.name
+        all_dfs.append(df)
+
+    if all_dfs:
+        final_df = pd.concat(all_dfs, ignore_index=True)
+        final_df["Earliest Due Date"] = pd.to_datetime(final_df["Due Date"], errors="coerce")
+        final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
+
+        st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
+        st.dataframe(final_df, use_container_width=True)
+
+        output = BytesIO()
+        final_df.to_excel(output, index=False)
+        output.seek(0)
+        st.download_button("\U0001F4E5 Download Excel", output, file_name="extractedDocket.xlsx")
