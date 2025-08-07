@@ -56,6 +56,23 @@ def get_earliest_due_date(dates_str):
     except:
         return pd.NaT
 
+def process_extensions(text):
+    extension_date = ""
+    due_dates = []
+    for line in text.splitlines():
+        line_lower = line.lower()
+        if "ext" in line_lower or "extension" in line_lower:
+            date_matches = PATTERNS["date"].findall(line)
+            if len(date_matches) >= 2:
+                due_dates.append(date_matches[0])
+                extension_date = date_matches[1]
+            elif len(date_matches) == 1:
+                due_dates.append(date_matches[0])
+        else:
+            for date_match in PATTERNS["date"].findall(line):
+                due_dates.append(date_match)
+    return "; ".join(sorted(set(due_dates))), extension_date
+
 def date_split(due_dates_str, raw_text, base_entry):
     if not isinstance(due_dates_str, str):
         return [base_entry]
@@ -88,14 +105,11 @@ def extract_entries_from_textbox(text, months_back=0):
         "application_number": None,
         "pct_number": None,
         "wipo_number": None,
-        "due_dates": [],
         "raw_text": "\n".join(lines)
     }
 
     for line in lines:
-        clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
-        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_line)
-        clean_line = clean_line.replace(",", "")
+        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", line.replace(",", ""))
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
             entry["docket_number"] = PATTERNS["docket_number"].search(clean_line).group(0)
@@ -111,20 +125,13 @@ def extract_entries_from_textbox(text, months_back=0):
         if not entry["wipo_number"] and PATTERNS["wipo_number"].search(clean_line):
             entry["wipo_number"] = PATTERNS["wipo_number"].search(clean_line).group(0)
 
-        for match in PATTERNS["date"].findall(clean_line):
-            try:
-                parsed = parse(match, dayfirst=False, fuzzy=True)
-                if parsed.date() >= cutoff_date:
-                    entry["due_dates"].append(parsed.strftime("%m/%d/%Y"))
-            except:
-                continue
-
+    due_dates, extension = process_extensions("\n".join(lines))
     if not (entry["docket_number"] or entry["application_number"] or entry["pct_number"] or entry["wipo_number"]):
         return []
-
-    if entry["due_dates"]:
+    if due_dates:
+        entry["due_dates"] = due_dates
+        entry["extension"] = extension
         entries.append(entry)
-
     return entries
 
 def extract_from_pptx(upload, months_back):
@@ -146,13 +153,14 @@ def extract_from_pptx(upload, months_back):
                         "Application Number": entry["application_number"],
                         "PCT Number": entry["pct_number"],
                         "WIPO Number": entry["wipo_number"],
-                        "Due Dates": "; ".join(entry["due_dates"])
+                        "Due Dates": entry["due_dates"],
+                        "Extension": entry["extension"]
                     }
                     split_entries = date_split(base_entry["Due Dates"], base_entry["Textbox Content"], base_entry)
                     results.extend(split_entries)
 
     if not results:
-        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Date", "Action"])
+        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Date", "Extension", "Action"])
 
     df = pd.DataFrame(results)
     df["Earliest Due Date"] = df["Due Date"].apply(get_earliest_due_date)
@@ -181,7 +189,7 @@ if ppt_files:
     for ppt_file in ppt_files:
         df = extract_from_pptx(ppt_file, months_back)
         if df.empty:
-            st.warning(f"⚠️ No extractable data found in {ppt_file.name}.")
+            st.warning(f"\u26a0\ufe0f No extractable data found in {ppt_file.name}.")
             continue
         df["Filename"] = ppt_file.name
         all_dfs.append(df)
@@ -191,7 +199,7 @@ if ppt_files:
         final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
         final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
 
-        st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
+        st.success(f"\u2705 Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
 
         output = BytesIO()
