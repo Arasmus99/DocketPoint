@@ -1,4 +1,4 @@
-import os
+import os 
 import re
 from datetime import datetime, date
 from dateutil.parser import parse
@@ -7,7 +7,6 @@ import pandas as pd
 import streamlit as st
 from io import BytesIO
 
-# === Regex Patterns ===
 PATTERNS = {
     "docket": re.compile(r"\b\d{4,}\.\d{4}(?:-\w+)?\b"),
     "application": re.compile(r"\d{2}/\d{3},\d{3}"),
@@ -16,47 +15,54 @@ PATTERNS = {
     "date": re.compile(r"\b(?:\d{1,2}[/-])?\d{1,2}[/-]\d{2,4}\b")
 }
 
-# === Date & Action Extraction ===
 def extract_action_and_dates_from_raw_text(raw_text):
     raw_lines = raw_text.splitlines()
-    due_date = None
-    extension_date = None
+    future_dates = []
     action = ""
+    extension_date = None
 
     for line in raw_lines:
-        line_lower = line.lower()
-
-        if "due" in line_lower:
+        for date_match in PATTERNS["date"].findall(line):
             try:
-                due_pos = line_lower.find("due")
-                after_due = line[due_pos:]
-                due_match = PATTERNS["date"].search(after_due)
-                if due_match:
-                    due_date_raw = due_match.group()
-                    parsed_due = parse(due_date_raw, dayfirst=False, fuzzy=True)
-
-                    if parsed_due.date() >= date.today():
-                        due_date = parsed_due.strftime("%m/%d/%Y")
-
-                        # Action is only the content before the due date on the same line
-                        action = line.split(due_date_raw)[0].strip()
-
-                        # Handle extension
-                        if "ext" in line_lower or "extension" in line_lower:
-                            ext_pos = line_lower.find("ext")
-                            after_ext = line[ext_pos:]
-                            ext_match = PATTERNS["date"].search(after_ext)
-                            if ext_match:
-                                extension_date_raw = ext_match.group()
-                                parsed_ext = parse(extension_date_raw, dayfirst=False, fuzzy=True)
-                                extension_date = parsed_ext.strftime("%m/%d/%Y")
-
+                parsed = parse(date_match, dayfirst=False, fuzzy=True)
+                if parsed.date() >= date.today():
+                    future_dates.append((parsed.strftime("%m/%d/%Y"), line, date_match))
             except:
                 continue
 
-    return action, due_date, extension_date
+    if len(future_dates) == 0:
+        return "", None, None
 
-# === Entry Extraction per Textbox ===
+    # If multiple dates found, only treat those with 'due' as due dates
+    if len(future_dates) > 1:
+        for formatted_date, line, date_match in future_dates:
+            line_lower = line.lower()
+            if "due" in line_lower:
+                due_pos = line_lower.find("due")
+                after_due = line[due_pos:]
+                if date_match in after_due:
+                    due_date = formatted_date
+                    action = line.split(date_match)[0].strip()
+
+                    # Check for extension after this date
+                    if "ext" in line_lower or "extension" in line_lower:
+                        ext_pos = line_lower.find("ext")
+                        after_ext = line[ext_pos:]
+                        ext_match = PATTERNS["date"].search(after_ext)
+                        if ext_match:
+                            try:
+                                ext_parsed = parse(ext_match.group(), dayfirst=False, fuzzy=True)
+                                extension_date = ext_parsed.strftime("%m/%d/%Y")
+                            except:
+                                pass
+
+                    return action, due_date, extension_date
+
+    # Fallback: just take the first future-looking date
+    first_date, first_line, first_raw = future_dates[0]
+    action = first_line.split(first_raw)[0].strip()
+    return action, first_date, None
+
 def extract_entries_from_textbox(text, slide_index, file_name):
     entries = []
     text = text.replace("\u2028", "\n")  # Handle soft line breaks
@@ -94,22 +100,20 @@ def extract_entries_from_textbox(text, slide_index, file_name):
 
     return entries
 
-# === PPTX Parser ===
-def extract_from_pptx(file):
+def extract_from_pptx(pptx_file):
     all_entries = []
-    prs = Presentation(file)
+    prs = Presentation(pptx_file)
 
     for i, slide in enumerate(prs.slides):
         for shape in slide.shapes:
             if shape.has_text_frame:
                 raw_text = shape.text.strip()
-                entries = extract_entries_from_textbox(raw_text, i + 1, file.name)
+                entries = extract_entries_from_textbox(raw_text, i + 1, pptx_file.name)
                 all_entries.extend(entries)
 
     return pd.DataFrame(all_entries)
 
 # === Streamlit UI ===
-st.set_page_config(layout="wide")
 st.title("\U0001F4CA DocketPoint")
 
 st.sidebar.image("firm_logo.png", use_container_width=True)
@@ -140,12 +144,8 @@ if ppt_files:
 
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
-
-        # Filter by due date range
-        final_df["Due Date Parsed"] = pd.to_datetime(final_df["Due Date"], errors="coerce")
-        cutoff = pd.Timestamp.now() - pd.DateOffset(months=months_back)
-        final_df = final_df[final_df["Due Date Parsed"] >= cutoff].copy()
-        final_df = final_df.sort_values(by="Due Date Parsed").drop(columns=["Due Date Parsed"])
+        final_df["Earliest Due Date"] = pd.to_datetime(final_df["Due Date"], errors="coerce")
+        final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
 
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
