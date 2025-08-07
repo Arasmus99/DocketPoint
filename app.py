@@ -81,7 +81,7 @@ def extract_entries_from_textbox(text):
     }
 
     for line in lines:
-        clean_line = re.sub(r"[^0-9A-Za-z/,.-\s]", "", line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/"))
+        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/"))
         clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
