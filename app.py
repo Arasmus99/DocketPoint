@@ -151,8 +151,8 @@ def extract_from_pptx(upload, months_back):
                         "Application Number": entry["application_number"],
                         "PCT Number": entry["pct_number"],
                         "WIPO Number": entry["wipo_number"],
-                        "Due Date": entry["due_date"],
-                        "Action": entry["Action"]
+                        "Action": entry["Action"],
+                        "Due Date": entry["due_date"]
                     })
 
     if not results:
