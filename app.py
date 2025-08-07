@@ -223,4 +223,4 @@ if ppt_files:
         output = BytesIO()
         final_df.to_excel(output, index=False)
         output.seek(0)
-        st.download_button("\U0001F4E5 Download Excel", output, file_name="combined_extracted_data.xlsx"
+        st.download_button("\U0001F4E5 Download Excel", output, file_name="combined_extracted_data.xlsx")
