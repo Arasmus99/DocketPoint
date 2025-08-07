@@ -81,7 +81,7 @@ def extract_entries_from_textbox(text):
     }
 
     for line in lines:
-        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/"))
+        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/"))
         clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
@@ -104,6 +104,8 @@ def extract_entries_from_textbox(text):
 
     if not (entry["docket_number"] or entry["application_number"] or entry["pct_number"] or entry["wipo_number"]):
         return []
+
+    entry["Textbox Content"] = entry["raw_text"]
 
     if entry["due_dates"]:
         entries.append(entry)
