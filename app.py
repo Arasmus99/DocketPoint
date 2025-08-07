@@ -9,11 +9,11 @@ from io import BytesIO
 # === Regex Patterns ===
 PATTERNS = {
     "docket_number": re.compile(
-        r"\b\d{4}-[A-Z]{2,}-\d{5}-\d{2}\b"
-        r"|\b\d{5}-\d{2}\b"
-        r"|\b\d{5}-\d{4}-\d{2}[A-Z]{2,4}\b"
-        r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"
-        r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
+        r"\b\d{4}-[A-Z]{2,}-\d{5}-\d{2}\b"           # e.g. 2018-LOW-68327-13
+        r"|\b\d{5}-\d{2}\b"                           # e.g. 68327-13
+        r"|\b\d{5}-\d{4}-\d{2}[A-Z]{2,4}\b"           # e.g. 01330-0004-00US
+        r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"           # e.g. 0509.0003-US8 or 0509-0003-US8
+        r"|\b\d{4}-\d{4}-[A-Z]{3}\b"                  # e.g. 0509-0001-PCT
     ),
     "application_number": re.compile(r"\b\d{2}/\d{3}[,]?\d{3}\s+[A-Z]{2}\b"),
     "alt_application_number": re.compile(
@@ -27,9 +27,10 @@ PATTERNS = {
 
 SKIP_PHRASES = ["PENDING", "ABANDONED", "WITHDRAWN", "GRANTED", "ISSUED", "STRUCTURE"]
 
+# === Recursive text extraction for GroupShapes ===
 def extract_texts_from_shape_recursive(shape):
     texts = []
-    if shape.shape_type == 6:
+    if shape.shape_type == 6:  # GroupShape
         for shp in shape.shapes:
             texts.extend(extract_texts_from_shape_recursive(shp))
     else:
@@ -56,19 +57,10 @@ def get_earliest_due_date(dates_str):
     except:
         return pd.NaT
 
-def process_extensions(text):
-    ext_keywords = ["ext", "extension"]
-    for line in text.splitlines():
-        lower = line.lower()
-        if any(kw in lower for kw in ext_keywords):
-            dates = PATTERNS["date"].findall(line)
-            if len(dates) >= 2:
-                return parse(dates[1], dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-    return None
-
-def extract_entries_from_textbox(text):
+def extract_entries_from_textbox(text, months_back=0):
     entries = []
     lines = [line.strip() for line in text.splitlines() if line.strip()]
+    cutoff_date = date.today() - timedelta(days=30 * months_back)
 
     entry = {
         "docket_number": None,
@@ -76,109 +68,112 @@ def extract_entries_from_textbox(text):
         "pct_number": None,
         "wipo_number": None,
         "due_dates": [],
-        "raw_text": "\n".join(lines),
-        "Extension": process_extensions(text)
+        "raw_text": "\n".join(lines)
     }
 
     for line in lines:
-        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/"))
+        clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
+        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", clean_line)
         clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
             entry["docket_number"] = PATTERNS["docket_number"].search(clean_line).group(0)
+
         if not entry["pct_number"] and PATTERNS["pct_number"].search(clean_line):
             entry["pct_number"] = PATTERNS["pct_number"].search(clean_line).group(0)
+
         if not entry["application_number"] and PATTERNS["application_number"].search(clean_line):
             entry["application_number"] = PATTERNS["application_number"].search(clean_line).group(0)
         elif not entry["application_number"] and PATTERNS["alt_application_number"].search(clean_line):
             entry["application_number"] = PATTERNS["alt_application_number"].search(clean_line).group(0)
+
         if not entry["wipo_number"] and PATTERNS["wipo_number"].search(clean_line):
             entry["wipo_number"] = PATTERNS["wipo_number"].search(clean_line).group(0)
 
         for match in PATTERNS["date"].findall(clean_line):
             try:
                 parsed = parse(match, dayfirst=False, fuzzy=True)
-                entry["due_dates"].append(parsed.strftime("%m/%d/%Y"))
+                if parsed.date() >= cutoff_date:
+                    entry["due_dates"].append(parsed.strftime("%m/%d/%Y"))
             except:
                 continue
 
     if not (entry["docket_number"] or entry["application_number"] or entry["pct_number"] or entry["wipo_number"]):
         return []
 
-    entry["Textbox Content"] = entry["raw_text"]
-
     if entry["due_dates"]:
         entries.append(entry)
 
     return entries
 
-def split_due_dates(entry_dict):
-    due_dates = entry_dict["due_dates"]
-    if not due_dates:
-        return []
-
-    results = []
-    for d in due_dates:
-        new_entry = {
-            "Slide": entry_dict["Slide"],
-            "Textbox Content": entry_dict["Textbox Content"],
-            "Docket Number": entry_dict["docket_number"],
-            "Application Number": entry_dict["application_number"],
-            "PCT Number": entry_dict["pct_number"],
-            "WIPO Number": entry_dict["wipo_number"],
-            "Extension": entry_dict["Extension"],
-            "Due Dates": "; ".join(due_dates),
-            "Due Date": d
-        }
-        results.append(new_entry)
-    return results
-
-def extract_from_pptx(upload):
+def extract_from_pptx(upload, months_back):
     prs = Presentation(upload)
-    raw_entries = []
+    results = []
 
     for slide_num, slide in enumerate(prs.slides, start=1):
-        for shape in slide.shapes:
+        for shape_num, shape in enumerate(slide.shapes, start=1):
             texts = extract_texts_from_shape_recursive(shape)
             for text in texts:
                 if not should_include(text):
                     continue
-                for entry in extract_entries_from_textbox(text):
-                    entry["Slide"] = slide_num
-                    raw_entries.append(entry)
+                entries = extract_entries_from_textbox(text, months_back)
+                for entry in entries:
+                    results.append({
+                        "Slide": slide_num,
+                        "Textbox Content": entry["raw_text"],
+                        "Docket Number": entry["docket_number"],
+                        "Application Number": entry["application_number"],
+                        "PCT Number": entry["pct_number"],
+                        "WIPO Number": entry["wipo_number"],
+                        "Due Dates": "; ".join(entry["due_dates"])
+                    })
 
-    all_split_entries = []
-    for entry in raw_entries:
-        all_split_entries.extend(split_due_dates(entry))
+    if not results:
+        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Dates"])
 
-    df = pd.DataFrame(all_split_entries)
-    if df.empty:
-        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Date", "Extension"])
+    df = pd.DataFrame(results)
+    # Extract actual datetime for sorting, then format back to string for display
+    df["Earliest Due Date"] = df["Due Dates"].apply(get_earliest_due_date)
+    df = df.sort_values(by="Earliest Due Date", ascending=True)
 
-    today = date.today()
-    df["Due Date Parsed"] = pd.to_datetime(df["Due Date"], errors="coerce")
-    df = df[df["Due Date Parsed"] >= pd.to_datetime(today)]
-    df = df.drop(columns=["Due Date Parsed"])
+    # Reformat to consistent MM/DD/YYYY string for display (optional)
+    df["Due Dates"] = df["Due Dates"].apply(
+        lambda x: "; ".join(
+            sorted([
+                parse(d.strip(), fuzzy=True).strftime("%m/%d/%Y")
+                for d in x.split(";") if d.strip()
+            ])
+        ) if isinstance(x, str) else x
+    )
+    df = df.drop(columns=["Earliest Due Date"])
+
     return df
 
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
+# === Sidebar Branding ===
 st.sidebar.image("firm_logo.png", use_container_width=True)
+# === App Description ===
 st.sidebar.markdown("---")
-st.sidebar.markdown("""
-**About DocketPoint**
+st.sidebar.markdown(
+    """
+    **About DocketPoint**
 
-This tool extracts docket numbers, application numbers, and due dates from PowerPoint files.  
-It helps organize patent prosecution data and export it to Excel for streamlined docket tracking.  
-Use the slider to filter by due date range.
-""")
+    This tool extracts docket numbers, application numbers, and due dates from PowerPoint files.  
+    It helps organize patent prosecution data and export it to Excel for streamlined docket tracking.  
+    Use the slider to filter by due date range.
+    """
+)
 st.sidebar.markdown("---")
 
+# === Upload ===
 ppt_files = st.file_uploader("Upload one or more PowerPoint (.pptx) files", type="pptx", accept_multiple_files=True)
+months_back = st.slider("Include due dates up to this many months in the past:", 0, 24, 0)
+
 if ppt_files:
     all_dfs = []
     for ppt_file in ppt_files:
-        df = extract_from_pptx(ppt_file)
+        df = extract_from_pptx(ppt_file, months_back)
         if df.empty:
             st.warning(f"⚠️ No extractable data found in {ppt_file.name}.")
             continue
@@ -187,9 +182,11 @@ if ppt_files:
 
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
-        final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
+        
+        # Globally sort by earliest due date
+        final_df["Earliest Due Date"] = final_df["Due Dates"].apply(get_earliest_due_date)
         final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
-
+        
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
 
