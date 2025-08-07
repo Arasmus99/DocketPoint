@@ -80,20 +80,12 @@ def date_split(due_dates_str, raw_text, base_entry):
     due_dates = [d.strip() for d in due_dates_str.split(";") if d.strip()]
     if len(due_dates) <= 1:
         base_entry["Due Date"] = due_dates[0] if due_dates else None
-        base_entry["Action"] = raw_text
         return [base_entry]
 
     results = []
-    lines = raw_text.splitlines()
     for due_date in due_dates:
-        action = ""
-        for line in lines:
-            if due_date in line:
-                action = line.strip()
-                break
         entry_copy = base_entry.copy()
         entry_copy["Due Date"] = due_date
-        entry_copy["Action"] = action
         results.append(entry_copy)
     return results
 
@@ -114,7 +106,7 @@ def extract_entries_from_textbox(text):
 
     for line in lines:
         clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
-        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_line)
+        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", clean_line)
         clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
@@ -173,7 +165,7 @@ def extract_from_pptx(upload):
                     results.extend(split_entries)
 
     if not results:
-        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Date", "Extension", "Action"])
+        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Date", "Extension"])
 
     df = pd.DataFrame(results)
 
