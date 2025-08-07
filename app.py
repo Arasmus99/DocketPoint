@@ -27,7 +27,6 @@ PATTERNS = {
 
 SKIP_PHRASES = ["PENDING", "ABANDONED", "WITHDRAWN", "GRANTED", "ISSUED", "STRUCTURE"]
 
-# === Recursive text extraction ===
 def extract_texts_from_shape_recursive(shape):
     texts = []
     if shape.shape_type == 6:  # GroupShape
@@ -48,15 +47,6 @@ def should_include(text):
     upper_text = text.upper()
     return not any(phrase in upper_text for phrase in SKIP_PHRASES)
 
-def get_earliest_due_date(dates_str):
-    if not isinstance(dates_str, str):
-        return pd.NaT
-    try:
-        dates = [parse(d.strip(), dayfirst=False, fuzzy=True) for d in dates_str.split(";") if d.strip()]
-        return min(dates) if dates else pd.NaT
-    except:
-        return pd.NaT
-
 def extract_action_and_dates_from_raw_text(entry):
     raw_lines = entry["raw_text"].splitlines()
     due_date = None
@@ -65,36 +55,29 @@ def extract_action_and_dates_from_raw_text(entry):
 
     for line in raw_lines:
         line_lower = line.lower()
-
-        # Only check lines with both a date and "due"
         if "due" in line_lower:
-            all_dates = PATTERNS["date"].findall(line)
-            if all_dates:
-                try:
-                    # Date after "due"
-                    due_pos = line_lower.find("due")
-                    after_due = line[due_pos:]
-                    due_match = PATTERNS["date"].search(after_due)
-                    if due_match:
-                        due_date = parse(due_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-                        action = line.split(due_match.group())[0].strip()
+            try:
+                due_pos = line_lower.find("due")
+                after_due = line[due_pos:]
+                due_match = PATTERNS["date"].search(after_due)
+                if due_match:
+                    due_date = parse(due_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
+                    action = line.split(due_match.group())[0].strip()
 
-                    # Extension date after "ext" or "extension"
-                    if "ext" in line_lower or "extension" in line_lower:
-                        ext_pos = line_lower.find("ext")
-                        after_ext = line[ext_pos:]
-                        ext_match = PATTERNS["date"].search(after_ext)
-                        if ext_match:
-                            extension_date = parse(ext_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
-                except:
-                    continue
+                if "ext" in line_lower or "extension" in line_lower:
+                    ext_pos = line_lower.find("ext")
+                    after_ext = line[ext_pos:]
+                    ext_match = PATTERNS["date"].search(after_ext)
+                    if ext_match:
+                        extension_date = parse(ext_match.group(), dayfirst=False, fuzzy=True).strftime("%m/%d/%Y")
+            except:
+                continue
 
     return action, due_date, extension_date
 
-def extract_entries_from_textbox(text, months_back=0):
+def extract_entries_from_textbox(text):
     entries = []
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    cutoff_date = date.today() - timedelta(days=30 * months_back)
 
     meta = {
         "docket_number": None,
@@ -127,8 +110,7 @@ def extract_entries_from_textbox(text, months_back=0):
         for match in PATTERNS["date"].findall(clean_line):
             try:
                 parsed = parse(match, dayfirst=False, fuzzy=True)
-                if parsed.date() >= cutoff_date:
-                    meta["due_dates"].append(parsed.strftime("%m/%d/%Y"))
+                meta["due_dates"].append(parsed.strftime("%m/%d/%Y"))
             except:
                 continue
 
@@ -158,13 +140,19 @@ def extract_from_pptx(upload, months_back):
             for text in texts:
                 if not should_include(text):
                     continue
-                entries = extract_entries_from_textbox(text, months_back)
+                entries = extract_entries_from_textbox(text)
                 for entry in entries:
                     entry["slide"] = slide_num
                     action, corrected_due, extension = extract_action_and_dates_from_raw_text(entry)
                     entry["Action"] = action
                     entry["Extension"] = extension
                     entry["due_date"] = corrected_due or entry["due_date"]
+
+                    try:
+                        if parse(entry["due_date"]).date() < date.today() - timedelta(days=30 * months_back):
+                            continue
+                    except:
+                        continue
 
                     results.append({
                         "Slide": entry["slide"],
