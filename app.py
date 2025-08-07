@@ -4,7 +4,10 @@ from datetime import datetime, date
 from dateutil.parser import parse
 from pptx import Presentation
 import pandas as pd
+import streamlit as st
+from io import BytesIO
 
+# === Regex Patterns ===
 PATTERNS = {
     "docket": re.compile(r"\b\d{4,}\.\d{4}(?:-\w+)?\b"),
     "application": re.compile(r"\d{2}/\d{3},\d{3}"),
@@ -13,6 +16,7 @@ PATTERNS = {
     "date": re.compile(r"\b(?:\d{1,2}[/-])?\d{1,2}[/-]\d{2,4}\b")
 }
 
+# === Date & Action Extraction ===
 def extract_action_and_dates_from_raw_text(raw_text):
     raw_lines = raw_text.splitlines()
     due_date = None
@@ -37,6 +41,7 @@ def extract_action_and_dates_from_raw_text(raw_text):
                         # Action is only the content before the due date on the same line
                         action = line.split(due_date_raw)[0].strip()
 
+                        # Handle extension
                         if "ext" in line_lower or "extension" in line_lower:
                             ext_pos = line_lower.find("ext")
                             after_ext = line[ext_pos:]
@@ -51,6 +56,7 @@ def extract_action_and_dates_from_raw_text(raw_text):
 
     return action, due_date, extension_date
 
+# === Entry Extraction per Textbox ===
 def extract_entries_from_textbox(text, slide_index, file_name):
     entries = []
     text = text.replace("\u2028", "\n")  # Handle soft line breaks
@@ -88,24 +94,22 @@ def extract_entries_from_textbox(text, slide_index, file_name):
 
     return entries
 
-def extract_from_pptx(pptx_folder):
+# === PPTX Parser ===
+def extract_from_pptx(file):
     all_entries = []
+    prs = Presentation(file)
 
-    for filename in os.listdir(pptx_folder):
-        if filename.endswith(".pptx"):
-            file_path = os.path.join(pptx_folder, filename)
-            prs = Presentation(file_path)
-
-            for i, slide in enumerate(prs.slides):
-                for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        raw_text = shape.text.strip()
-                        entries = extract_entries_from_textbox(raw_text, i + 1, filename)
-                        all_entries.extend(entries)
+    for i, slide in enumerate(prs.slides):
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                raw_text = shape.text.strip()
+                entries = extract_entries_from_textbox(raw_text, i + 1, file.name)
+                all_entries.extend(entries)
 
     return pd.DataFrame(all_entries)
 
 # === Streamlit UI ===
+st.set_page_config(layout="wide")
 st.title("\U0001F4CA DocketPoint")
 
 st.sidebar.image("firm_logo.png", use_container_width=True)
@@ -127,7 +131,7 @@ months_back = st.slider("Include due dates up to this many months in the past:",
 if ppt_files:
     all_dfs = []
     for ppt_file in ppt_files:
-        df = extract_from_pptx(ppt_file, months_back)
+        df = extract_from_pptx(ppt_file)
         if df.empty:
             st.warning(f"⚠️ No extractable data found in {ppt_file.name}.")
             continue
@@ -136,8 +140,12 @@ if ppt_files:
 
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
-        final_df["Earliest Due Date"] = pd.to_datetime(final_df["Due Date"], errors="coerce")
-        final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
+
+        # Filter by due date range
+        final_df["Due Date Parsed"] = pd.to_datetime(final_df["Due Date"], errors="coerce")
+        cutoff = pd.Timestamp.now() - pd.DateOffset(months=months_back)
+        final_df = final_df[final_df["Due Date Parsed"] >= cutoff].copy()
+        final_df = final_df.sort_values(by="Due Date Parsed").drop(columns=["Due Date Parsed"])
 
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
