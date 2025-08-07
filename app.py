@@ -47,12 +47,9 @@ def should_include(text):
     upper_text = text.upper()
     return not any(phrase in upper_text for phrase in SKIP_PHRASES)
 
-def get_earliest_due_date(dates_str):
-    if not isinstance(dates_str, str):
-        return pd.NaT
+def get_earliest_due_date(due_date_str):
     try:
-        dates = [parse(d.strip(), dayfirst=False, fuzzy=True) for d in dates_str.split(";") if d.strip()]
-        return min(dates) if dates else pd.NaT
+        return parse(due_date_str, dayfirst=False, fuzzy=True)
     except:
         return pd.NaT
 
@@ -86,6 +83,8 @@ def date_split(due_dates_str, raw_text, base_entry):
 
     due_dates = [d.strip() for d in due_dates_str.split(";") if d.strip()]
     if len(due_dates) <= 1:
+        base_entry["Due Date"] = due_dates[0] if due_dates else ""
+        base_entry["Action"] = raw_text.splitlines()[0] if raw_text else ""
         return [base_entry]
 
     results = []
@@ -118,7 +117,7 @@ def extract_entries_from_textbox(text):
 
     for line in lines:
         clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
-        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", clean_line)
+        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_line)
         clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
