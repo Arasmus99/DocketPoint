@@ -61,45 +61,45 @@ def extract_dates_in_future(text):
     return future_dates
 
 # === Extract Action + Dates From Line ===
-def extract_action_and_dates_from_raw_text(raw_text):
-    line_lower = raw_text.lower()
-    future_dates = extract_dates_in_future(raw_text)
+def extract_action_and_dates_from_raw_text(entry):
+    raw_lines = entry["raw_text"].splitlines()
     due_date = None
     extension_date = None
     action = ""
 
-    if len(future_dates) == 0:
-        return None
-
-    if len(future_dates) == 1:
-        if "due" in line_lower or any(kw in line_lower for kw in ["deadline", "last day to pay", "final date"]):
-            due_date = future_dates[0][1]
-            action = raw_text.split(future_dates[0][0])[0].strip()
-
-    elif len(future_dates) >= 2:
-        first_raw, first_fmt = future_dates[0]
-        second_raw, second_fmt = future_dates[1]
-
-        first_index = raw_text.find(first_raw)
-        second_index = raw_text.find(second_raw)
-        ext_index = line_lower.find("ext")
+    for line in raw_lines:
+        line_lower = line.lower()
 
         if "due" in line_lower:
-            due_date = first_fmt
-            action = raw_text.split(first_raw)[0].strip()
+            try:
+                # === Extract due date ===
+                due_pos = line_lower.find("due")
+                after_due = line[due_pos:]
+                due_match = PATTERNS["date"].search(after_due)
+                if due_match:
+                    due_date_raw = due_match.group()
+                    parsed_due = parse(due_date_raw, dayfirst=False, fuzzy=True)
 
-            # only assign extension if 'ext' is between the two dates
-            if ext_index != -1 and first_index < ext_index < second_index:
-                extension_date = second_fmt
+                    if parsed_due.date() >= date.today():
+                        due_date = parsed_due.strftime("%m/%d/%Y")
 
-    if due_date:
-        return {
-            "Due Date": due_date,
-            "Extension": extension_date,
-            "Action": action
-        }
+                        # === Action is just from the line with the due date ===
+                        action = line.split(due_date_raw)[0].strip()
 
-    return None
+                        # === Extract extension date if present ===
+                        if "ext" in line_lower or "extension" in line_lower:
+                            ext_pos = line_lower.find("ext")
+                            after_ext = line[ext_pos:]
+                            ext_match = PATTERNS["date"].search(after_ext)
+                            if ext_match:
+                                extension_date_raw = ext_match.group()
+                                parsed_ext = parse(extension_date_raw, dayfirst=False, fuzzy=True)
+                                extension_date = parsed_ext.strftime("%m/%d/%Y")
+
+            except:
+                continue
+
+    return action, due_date, extension_date
 
 # === Main Extractor ===
 def extract_entries_from_textbox(text):
