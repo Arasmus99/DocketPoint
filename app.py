@@ -29,29 +29,27 @@ SKIP_PHRASES = ["PENDING", "ABANDONED", "WITHDRAWN", "GRANTED", "ISSUED", "STRUC
 
 # === Helper functions for date cleaning and actions ===
 def date_split(df):
-    """
-    Splits each semicolon-separated due date into its own row,
-    while retaining all other column values.
-    """
-    split_rows = []
+    new_rows = []
 
     for _, row in df.iterrows():
-        dates = str(row["Due Dates"]).split(";")
-        for date_str in dates:
-            date_str = date_str.strip()
-            if not date_str:
-                continue
+        text = row["Textbox Content"]
+        matches = re.findall(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", text)
+
+        for match in matches:
             try:
-                date_obj = parse(date_str, dayfirst=False, fuzzy=True)
-                formatted_date = f"{date_obj.month}/{date_obj.day}/{str(date_obj.year)[-2:]}"  # e.g., 8/15/25
+                parsed_date = parse(match, fuzzy=True)
+                # Match full sentence or phrase containing the date
+                sentence_match = re.search(r"([^\n]*?" + re.escape(match) + r"[^\n]*?)", text)
+                action_text = sentence_match.group(1).strip() if sentence_match else ""
+                
                 new_row = row.copy()
-                new_row["Due Date"] = formatted_date  # Add single date column
-                split_rows.append(new_row)
-            except Exception:
+                new_row["Due Date"] = parsed_date.strftime("%-m/%-d/%y")
+                new_row["Action"] = action_text
+                new_rows.append(new_row)
+            except Exception as e:
                 continue
 
-    result_df = pd.DataFrame(split_rows).drop(columns=["Due Dates"])
-    return result_df
+    return pd.DataFrame(new_rows)
 
 def find_extension(df):
     import re
