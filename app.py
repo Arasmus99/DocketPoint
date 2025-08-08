@@ -137,19 +137,6 @@ def extract_from_pptx(upload, months_back):
     df["Earliest Due Date"] = df["Due Dates"].apply(get_earliest_due_date)
     df = df.sort_values(by="Earliest Due Date", ascending=True)
 
-    # Reformat to consistent MM/DD/YYYY string for display (optional)
-    df["Due Dates"] = df["Due Dates"].apply(
-        lambda x: "; ".join(
-            sorted([
-                parse(d.strip(), fuzzy=True).strftime("%m/%d/%Y")
-                for d in x.split(";") if d.strip()
-            ])
-        ) if isinstance(x, str) else x
-    )
-    df = df.drop(columns=["Earliest Due Date"])
-
-    return df
-
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
 # === Sidebar Branding ===
@@ -188,10 +175,19 @@ if ppt_files:
         #final_df = find_extension(final_df)
         #final_df = date_split(final_df)
         #final_df = find_action(final_df)
+        # Reformat to consistent MM/DD/YYYY string for display (optional)
+        df["Due Dates"] = df["Due Dates"].apply(
+            lambda x: "; ".join(
+                sorted([
+                    parse(d.strip(), fuzzy=True).strftime("%m/%d/%Y")
+                    for d in x.split(";") if d.strip()
+                ])
+            ) if isinstance(x, str) else x
+        )
 
         # ✅ Now sort by the new single due date column
-        final_df["Earliest Due Date"] = final_df["Due Dates"].apply(get_earliest_due_date)
-        final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
+        #final_df["Earliest Due Date"] = final_df["Due Dates"].apply(get_earliest_due_date)
+        #final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
 
         
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
