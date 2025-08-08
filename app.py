@@ -290,16 +290,6 @@ if ppt_files:
         final_df = date_split(final_df)
         final_df = find_action(final_df)
     
-        # ✅ Reformat Due Dates to MM/D/YY format for compatibility
-        final_df["Due Dates"] = final_df["Due Dates"].apply(
-            lambda x: "; ".join(
-                sorted([
-                    f"{parse(d.strip(), fuzzy=True).month}/{parse(d.strip(), fuzzy=True).day}/{str(parse(d.strip(), fuzzy=True).year)[-2:]}"
-                    for d in x.split(";") if d.strip()
-                ])
-            ) if isinstance(x, str) else x
-        )
-    
         # ✅ Sort by the new single due date column
         final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
         final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
