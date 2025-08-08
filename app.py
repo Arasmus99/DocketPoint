@@ -147,7 +147,7 @@ def date_split(df):
                 date_obj = parse(date_str, dayfirst=False, fuzzy=True)
                 formatted_date = f"{date_obj.month}/{date_obj.day}/{str(date_obj.year)[-2:]}"
                 new_row = row.copy()
-                new_row["Due Date"] = form+6+atted_date
+                new_row["Due Date"] = formatted_date
                 split_rows.append(new_row)
             except Exception:
                 continue
