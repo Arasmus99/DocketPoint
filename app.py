@@ -27,124 +27,6 @@ PATTERNS = {
 
 SKIP_PHRASES = ["PENDING", "ABANDONED", "WITHDRAWN", "GRANTED", "ISSUED", "STRUCTURE"]
 
-# === Helper functions for date cleaning and actions ===
-def date_split(df):
-    new_rows = []
-
-    for _, row in df.iterrows():
-        text = row["Textbox Content"]
-        matches = re.findall(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", text)
-
-        for match in matches:
-            try:
-                parsed_date = parse(match, fuzzy=True)
-
-                # Extract full line that contains the date
-                lines = text.split("\n")
-                action_line = next((line.strip() for line in lines if match in line), "")
-
-                new_row = row.copy()
-                new_row["Due Date"] = parsed_date.strftime("%-m/%-d/%y")
-                new_row["Action"] = action_line
-                new_rows.append(new_row)
-            except Exception:
-                continue
-
-    new_df = pd.DataFrame(new_rows)
-
-    # Only include dates after Jan 1, 2024 (or another threshold)
-    cutoff_date = pd.to_datetime("2024-01-01")
-    new_df["Due Date"] = pd.to_datetime(new_df["Due Date"], errors='coerce')
-    new_df = new_df[new_df["Due Date"] >= cutoff_date]
-
-    return new_df
-
-def find_extension(df):
-    import re
-    from dateutil.parser import parse
-
-    df = df.copy()
-    df["Extension"] = None
-    keyword_variants = ["ext", "extension"]
-
-    date_pattern = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
-
-    for idx, row in df.iterrows():
-        due_dates_str = row["Due Dates"]
-        textbox = row["Textbox Content"]
-
-        if not isinstance(due_dates_str, str) or ";" not in due_dates_str:
-            continue  # skip single or empty date cells
-
-        lines = textbox.splitlines()
-        ext_date = None
-
-        for line in lines:
-            line_lower = line.lower()
-            for kw in keyword_variants:
-                if kw in line_lower:
-                    ext_pos = line_lower.find(kw)
-                    post_kw_text = line[ext_pos:]
-
-                    # Only search for dates *after* the keyword
-                    date_matches = date_pattern.findall(post_kw_text)
-                    if date_matches:
-                        try:
-                            ext_obj = parse(date_matches[0], fuzzy=True)
-                            ext_date = f"{ext_obj.month}/{ext_obj.day}/{str(ext_obj.year)[-2:]}"  # match format like '10/2/25'
-                            break  # Stop at first valid match
-                        except:
-                            continue
-            if ext_date:
-                break
-
-        if ext_date:
-            current_dates = [d.strip() for d in due_dates_str.split(";") if d.strip()]
-            filtered_dates = [d for d in current_dates if d != ext_date]
-
-            df.at[idx, "Due Dates"] = "; ".join(filtered_dates)
-            df.at[idx, "Extension"] = ext_date
-
-    return df
-
-def find_action(df):
-    """
-    For each row, find the line in 'Textbox Content' that contains the due date.
-    Extract the full line minus the due date:
-    - If text appears *before* the due date: use only that.
-    - If not, use the text *after* the due date.
-    """
-    actions = []
-
-    for _, row in df.iterrows():
-        textbox = str(row["Textbox Content"])
-        due_date = str(row["Due Date"])
-        action_found = ""
-
-        for line in textbox.splitlines():
-            if due_date in line:
-                # Use regex to locate each exact match of the due date
-                matches = list(re.finditer(re.escape(due_date), line))
-
-                for match in matches:
-                    start, end = match.span()
-                    before = line[:start].strip()
-                    after = line[end:].strip()
-
-                    if before:
-                        action_found = before
-                    elif after:
-                        action_found = after
-                    else:
-                        action_found = ""
-                    break  # Stop after first valid use
-                break  # Stop after first matching line
-
-        actions.append(action_found)
-
-    df["Action"] = actions
-    return df
-    
 # === Recursive text extraction for GroupShapes ===
 def extract_texts_from_shape_recursive(shape):
     texts = []
@@ -212,8 +94,7 @@ def extract_entries_from_textbox(text, months_back=0):
             try:
                 parsed = parse(match, dayfirst=False, fuzzy=True)
                 if parsed.date() >= cutoff_date:
-                    entry["due_dates"].append(f"{parsed.month}/{parsed.day}/{str(parsed.year)[-2:]}")
-
+                    entry["due_dates"].append(parsed.strftime("%m/%d/%Y"))
             except:
                 continue
 
@@ -254,9 +135,20 @@ def extract_from_pptx(upload, months_back):
     # Extract actual datetime for sorting, then format back to string for display
     df["Earliest Due Date"] = df["Due Dates"].apply(get_earliest_due_date)
     df = df.sort_values(by="Earliest Due Date", ascending=True)
-    
+
+    # Reformat to consistent MM/DD/YYYY string for display (optional)
+    df["Due Dates"] = df["Due Dates"].apply(
+        lambda x: "; ".join(
+            sorted([
+                parse(d.strip(), fuzzy=True).strftime("%m/%d/%Y")
+                for d in x.split(";") if d.strip()
+            ])
+        ) if isinstance(x, str) else x
+    )
+    df = df.drop(columns=["Earliest Due Date"])
+
     return df
-    
+
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
 # === Sidebar Branding ===
@@ -290,21 +182,15 @@ if ppt_files:
 
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
-    
-        # ✅ Post-processing step: Apply your 3 new functions here, only once
-        final_df = find_extension(final_df)
-        final_df = date_split(final_df)
-        final_df = find_action(final_df)
-    
-        # ✅ Sort by the new single due date column
-        final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
+        
+        # Globally sort by earliest due date
+        final_df["Earliest Due Date"] = final_df["Due Dates"].apply(get_earliest_due_date)
         final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
-    
+        
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
-    
+
         output = BytesIO()
         final_df.to_excel(output, index=False)
         output.seek(0)
         st.download_button("\U0001F4E5 Download Excel", output, file_name="combined_extracted_data.xlsx")
-
