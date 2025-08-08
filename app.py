@@ -84,7 +84,8 @@ def find_extension(df):
                     date_matches = date_pattern.findall(post_kw_text)
                     if date_matches:
                         try:
-                            ext_date = parse(date_matches[0], fuzzy=True).strftime("%m/%d/%Y")
+                            ext_obj = parse(date_matches[0], fuzzy=True)
+                            ext_date = f"{ext_obj.month}/{ext_obj.day}/{str(ext_obj.year)[-2:]}"  # match format like '10/2/25'
                             break  # Stop at first valid match
                         except:
                             continue
