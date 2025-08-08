@@ -147,7 +147,7 @@ def date_split(df):
                 date_obj = parse(date_str, dayfirst=False, fuzzy=True)
                 formatted_date = f"{date_obj.month}/{date_obj.day}/{str(date_obj.year)[-2:]}"
                 new_row = row.copy()
-                new_row["Due Date"] = formatted_date
+                new_row["Due Date"] = form+6+atted_date
                 split_rows.append(new_row)
             except Exception:
                 continue
@@ -249,6 +249,8 @@ if ppt_files:
         # Sort and show
         final_df["Sort"] = final_df["Due Date"].apply(lambda x: parse(x, fuzzy=True) if pd.notna(x) else pd.NaT)
         final_df = final_df.sort_values(by="Sort", ascending=True).drop(columns=["Sort"])
+        
+        final_df = final_df[["Slide", "Due Date", "Extension", "Action", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Filename", "Textbox Content"]]
 
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
