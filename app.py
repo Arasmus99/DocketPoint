@@ -151,7 +151,7 @@ def date_split(df):
                 split_rows.append(new_row)
             except Exception:
                 continue
-    return pd.DataFrame(split_rows).drop(columns=["Due Dates"])
+    return pd.DataFrame(split_rows)
 
 def find_extension(df):
     df = df.copy()
