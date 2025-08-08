@@ -296,7 +296,7 @@ if ppt_files:
         )
 
         # ✅ Now sort by the new single due date column
-        final_df["Earliest Due Date"] = final_df["Due Dates"].apply(get_earliest_due_date)
+        final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
         final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
 
         
