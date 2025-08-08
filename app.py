@@ -261,7 +261,28 @@ if ppt_files:
         # Sort and show
         final_df["Sort"] = final_df["Due Date"].apply(lambda x: parse(x, fuzzy=True) if pd.notna(x) else pd.NaT)
         final_df = final_df.sort_values(by="Sort", ascending=True).drop(columns=["Sort"])
+
+        # === Rearrange columns ===
+        desired_order = [
+            "Action",
+            "Due Date",
+            "Slide",
+            "Docket Number",
+            "Application Number",
+            "PCT Number",
+            "WIPO Number",
+            "Extension",
+            "Filename",
+            # "Due Dates",  # Optional: exclude from display
+            "Textbox Content"
+        ]
         
+        # Include all existing columns, and preserve extras if added in the future
+        final_cols = [col for col in desired_order if col in final_df.columns]
+        other_cols = [col for col in final_df.columns if col not in final_cols]
+        
+        final_df = final_df[final_cols + other_cols]  # Ensure no columns are dropped accidentally
+
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
 
