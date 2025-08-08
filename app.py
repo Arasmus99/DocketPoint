@@ -101,8 +101,9 @@ def find_extension(df):
 
 def find_action(df):
     """
-    For each row, finds the line in 'Textbox Content' that contains each due date.
-    Extracts the full line minus the due date itself and stores it in 'Action'.
+    For each row, find the line in 'Textbox Content' that contains the due date.
+    If the due date is at the start of the line, use text after it.
+    If it's later in the line, use text before it.
     """
     actions = []
 
@@ -113,11 +114,14 @@ def find_action(df):
 
         for line in textbox.splitlines():
             if due_date_str in line:
-                # Remove the date from the line and clean up whitespace
-                line_without_date = line.replace(due_date_str, "").strip()
-                # Optional: remove any lingering double spaces
-                line_without_date = re.sub(r"\s{2,}", " ", line_without_date)
-                action_found = line_without_date
+                parts = line.split(due_date_str)
+                before = parts[0].strip()
+                after = parts[1].strip() if len(parts) > 1 else ""
+
+                if before:
+                    action_found = before
+                elif after:
+                    action_found = after
                 break
 
         actions.append(action_found)
