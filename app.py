@@ -157,7 +157,7 @@ def find_extension(df):
     df = df.copy()
     df["Extension"] = None
     keyword_variants = ["ext", "extension"]
-    date_pattern = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b")
+    date_pattern = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}")
     for idx, row in df.iterrows():
         due_dates_str = row["Due Dates"]
         textbox = row["Textbox Content"]
@@ -170,7 +170,7 @@ def find_extension(df):
             for kw in keyword_variants:
                 if kw in line_lower:
                     ext_pos = line_lower.find(kw)
-                    post_kw_text = line[ext_pos:]
+                    post_kw_text = line_lower[ext_pos:]
                     date_matches = date_pattern.findall(post_kw_text)
                     if date_matches:
                         try:
