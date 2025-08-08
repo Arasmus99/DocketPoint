@@ -291,13 +291,14 @@ if ppt_files:
         final_df = find_action(final_df)
         # Reformat to consistent MM/DD/YYYY string for display (optional)
        df["Due Dates"] = df["Due Dates"].apply(
-        lambda x: "; ".join(
-            sorted([
-                f"{parse(d.strip(), fuzzy=True).month}/{parse(d.strip(), fuzzy=True).day}/{str(parse(d.strip(), fuzzy=True).year)[-2:]}"
-                for d in x.split(";") if d.strip()
-            ])
-        ) if isinstance(x, str) else x
-    )
+    lambda x: "; ".join(
+        sorted([
+            f"{parse(d.strip(), fuzzy=True).month}/{parse(d.strip(), fuzzy=True).day}/{str(parse(d.strip(), fuzzy=True).year)[-2:]}"
+            for d in x.split(";") if d.strip()
+        ])
+    ) if isinstance(x, str) else x
+)
+
 
         # ✅ Now sort by the new single due date column
         final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
