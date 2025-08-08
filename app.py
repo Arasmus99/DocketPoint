@@ -246,7 +246,7 @@ if ppt_files:
         if df.empty:
             st.warning(f"⚠️ No extractable data found in {ppt_file.name}.")
             continue
-        df["Filename"] = ppt_file.name
+        df["Client"] = ppt_file.name.replace(".pptx", "")
         all_dfs.append(df)
 
     if all_dfs:
@@ -265,14 +265,14 @@ if ppt_files:
         # === Rearrange columns ===
         desired_order = [
             "Action",
+            "Extension",
             "Due Date",
             "Slide",
             "Docket Number",
             "Application Number",
             "PCT Number",
             "WIPO Number",
-            "Extension",
-            "Filename",
+            "Client",
             # "Due Dates",  # Optional: exclude from display
             "Textbox Content"
         ]
