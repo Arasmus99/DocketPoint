@@ -157,11 +157,11 @@ def find_extension(df):
     df = df.copy()
     df["Extension"] = None
     keyword_variants = ["ext", "extension"]
-    date_pattern = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
+    date_pattern = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b")
     for idx, row in df.iterrows():
         due_dates_str = row["Due Dates"]
         textbox = row["Textbox Content"]
-        if not isinstance(due_dates_str, str) or ";" not in due_dates_str:
+        if not isinstance(due_dates_str, str) or len(re.findall(r'\d{1,2}/\d{1,2}/\d{2,4}', due_dates_str)) < 2:
             continue
         lines = textbox.splitlines()
         ext_date = None
