@@ -9,11 +9,11 @@ from io import BytesIO
 # === Regex Patterns ===
 PATTERNS = {
     "docket_number": re.compile(
-        r"\b\d{4}-[A-Z]{2,}-\d{5}-\d{2}\b"           # e.g. 2018-LOW-68327-13
-        r"|\b\d{5}-\d{2}\b"                           # e.g. 68327-13
-        r"|\b\d{5}-\d{4}-\d{2}[A-Z]{2,4}\b"           # e.g. 01330-0004-00US
-        r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"           # e.g. 0509.0003-US8 or 0509-0003-US8
-        r"|\b\d{4}-\d{4}-[A-Z]{3}\b"                  # e.g. 0509-0001-PCT
+        r"\b\d{4}-[A-Z]{2,}-\d{5}-\d{2}\b"
+        r"|\b\d{5}-\d{2}\b"
+        r"|\b\d{5}-\d{4}-\d{2}[A-Z]{2,4}\b"
+        r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"
+        r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
     ),
     "application_number": re.compile(r"\b\d{2}/\d{3}[,]?\d{3}\s+[A-Z]{2}\b"),
     "alt_application_number": re.compile(
@@ -27,22 +27,17 @@ PATTERNS = {
 
 SKIP_PHRASES = ["PENDING", "ABANDONED", "WITHDRAWN", "GRANTED", "ISSUED", "STRUCTURE"]
 
-# === Recursive text extraction for GroupShapes ===
 def extract_texts_from_shape_recursive(shape):
     texts = []
-    if shape.shape_type == 6:  # GroupShape
+    if shape.shape_type == 6:
         for shp in shape.shapes:
             texts.extend(extract_texts_from_shape_recursive(shp))
     else:
-        text = extract_text_from_shape(shape)
-        if text:
-            texts.append(text)
+        if shape.has_text_frame:
+            text = shape.text.strip()
+            if text:
+                texts.append(text)
     return texts
-
-def extract_text_from_shape(shape):
-    if shape.has_text_frame:
-        return shape.text.strip()
-    return ""
 
 def should_include(text):
     upper_text = text.upper()
@@ -73,7 +68,7 @@ def extract_entries_from_textbox(text, months_back=0):
 
     for line in lines:
         clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
-        clean_line = re.sub(r"[^0-9A-Za-z/,.\s-]", "", clean_line)
+        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_line)
         clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
@@ -132,11 +127,9 @@ def extract_from_pptx(upload, months_back):
         return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Dates"])
 
     df = pd.DataFrame(results)
-    # Extract actual datetime for sorting, then format back to string for display
     df["Earliest Due Date"] = df["Due Dates"].apply(get_earliest_due_date)
     df = df.sort_values(by="Earliest Due Date", ascending=True)
 
-    # Reformat to consistent MM/DD/YYYY string for display (optional)
     df["Due Dates"] = df["Due Dates"].apply(
         lambda x: "; ".join(
             sorted([
@@ -151,9 +144,7 @@ def extract_from_pptx(upload, months_back):
 
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
-# === Sidebar Branding ===
 st.sidebar.image("firm_logo.png", use_container_width=True)
-# === App Description ===
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     """
@@ -166,7 +157,6 @@ st.sidebar.markdown(
 )
 st.sidebar.markdown("---")
 
-# === Upload ===
 ppt_files = st.file_uploader("Upload one or more PowerPoint (.pptx) files", type="pptx", accept_multiple_files=True)
 months_back = st.slider("Include due dates up to this many months in the past:", 0, 24, 0)
 
@@ -182,11 +172,10 @@ if ppt_files:
 
     if all_dfs:
         final_df = pd.concat(all_dfs, ignore_index=True)
-        
-        # Globally sort by earliest due date
+
         final_df["Earliest Due Date"] = final_df["Due Dates"].apply(get_earliest_due_date)
         final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
-        
+
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
 
