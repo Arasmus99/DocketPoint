@@ -38,18 +38,26 @@ def date_split(df):
         for match in matches:
             try:
                 parsed_date = parse(match, fuzzy=True)
-                # Match full sentence or phrase containing the date
-                sentence_match = re.search(r"([^\n]*?" + re.escape(match) + r"[^\n]*?)", text)
-                action_text = sentence_match.group(1).strip() if sentence_match else ""
-                
+
+                # Extract full line that contains the date
+                lines = text.split("\n")
+                action_line = next((line.strip() for line in lines if match in line), "")
+
                 new_row = row.copy()
                 new_row["Due Date"] = parsed_date.strftime("%-m/%-d/%y")
-                new_row["Action"] = action_text
+                new_row["Action"] = action_line
                 new_rows.append(new_row)
-            except Exception as e:
+            except Exception:
                 continue
 
-    return pd.DataFrame(new_rows)
+    new_df = pd.DataFrame(new_rows)
+
+    # Only include dates after Jan 1, 2024 (or another threshold)
+    cutoff_date = pd.to_datetime("2024-01-01")
+    new_df["Due Date"] = pd.to_datetime(new_df["Due Date"], errors='coerce')
+    new_df = new_df[new_df["Due Date"] >= cutoff_date]
+
+    return new_df
 
 def find_extension(df):
     import re
