@@ -246,7 +246,9 @@ def extract_from_pptx(upload, months_back):
     # Extract actual datetime for sorting, then format back to string for display
     df["Earliest Due Date"] = df["Due Dates"].apply(get_earliest_due_date)
     df = df.sort_values(by="Earliest Due Date", ascending=True)
-
+    
+    return df
+    
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
 # === Sidebar Branding ===
