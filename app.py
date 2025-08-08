@@ -282,33 +282,33 @@ if ppt_files:
         df["Filename"] = ppt_file.name
         all_dfs.append(df)
 
-if all_dfs:
-    final_df = pd.concat(all_dfs, ignore_index=True)
-
-    # ✅ Post-processing step: Apply your 3 new functions here, only once
-    final_df = find_extension(final_df)
-    final_df = date_split(final_df)
-    final_df = find_action(final_df)
-
-    # ✅ Reformat Due Dates to MM/D/YY format for compatibility
-    final_df["Due Dates"] = final_df["Due Dates"].apply(
-        lambda x: "; ".join(
-            sorted([
-                f"{parse(d.strip(), fuzzy=True).month}/{parse(d.strip(), fuzzy=True).day}/{str(parse(d.strip(), fuzzy=True).year)[-2:]}"
-                for d in x.split(";") if d.strip()
-            ])
-        ) if isinstance(x, str) else x
-    )
-
-    # ✅ Sort by the new single due date column
-    final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
-    final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
-
-    st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
-    st.dataframe(final_df, use_container_width=True)
-
-    output = BytesIO()
-    final_df.to_excel(output, index=False)
-    output.seek(0)
-    st.download_button("\U0001F4E5 Download Excel", output, file_name="combined_extracted_data.xlsx")
+    if all_dfs:
+        final_df = pd.concat(all_dfs, ignore_index=True)
+    
+        # ✅ Post-processing step: Apply your 3 new functions here, only once
+        final_df = find_extension(final_df)
+        final_df = date_split(final_df)
+        final_df = find_action(final_df)
+    
+        # ✅ Reformat Due Dates to MM/D/YY format for compatibility
+        final_df["Due Dates"] = final_df["Due Dates"].apply(
+            lambda x: "; ".join(
+                sorted([
+                    f"{parse(d.strip(), fuzzy=True).month}/{parse(d.strip(), fuzzy=True).day}/{str(parse(d.strip(), fuzzy=True).year)[-2:]}"
+                    for d in x.split(";") if d.strip()
+                ])
+            ) if isinstance(x, str) else x
+        )
+    
+        # ✅ Sort by the new single due date column
+        final_df["Earliest Due Date"] = final_df["Due Date"].apply(get_earliest_due_date)
+        final_df = final_df.sort_values(by="Earliest Due Date", ascending=True).drop(columns=["Earliest Due Date"])
+    
+        st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
+        st.dataframe(final_df, use_container_width=True)
+    
+        output = BytesIO()
+        final_df.to_excel(output, index=False)
+        output.seek(0)
+        st.download_button("\U0001F4E5 Download Excel", output, file_name="combined_extracted_data.xlsx")
 
