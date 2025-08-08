@@ -93,8 +93,7 @@ def extract_entries_from_textbox(text, months_back=0):
         for match in PATTERNS["date"].findall(clean_line):
             try:
                 parsed = parse(match, dayfirst=False, fuzzy=True)
-                if parsed.date() >= cutoff_date:
-                    entry["due_dates"].append(parsed.strftime("%m/%d/%Y"))
+                entry["due_dates"].append(parsed.strftime("%m/%d/%Y"))  # extract ALL dates for now
             except:
                 continue
 
@@ -135,6 +134,18 @@ def extract_from_pptx(upload, months_back):
     return df
 
 # === Helper functions for date cleaning and actions ===
+def filter_due_dates(df, cutoff_date):
+    df = df.copy()
+    filtered_rows = []
+    for _, row in df.iterrows():
+        try:
+            due_date = parse(row["Due Date"], dayfirst=False, fuzzy=True).date()
+            if due_date >= cutoff_date:
+                filtered_rows.append(row)
+        except:
+            continue
+    return pd.DataFrame(filtered_rows)
+
 def date_split(df):
     split_rows = []
     for _, row in df.iterrows():
@@ -245,11 +256,12 @@ if ppt_files:
         final_df = find_extension(final_df)
         final_df = date_split(final_df)
         final_df = find_action(final_df)
-
+        final_df = filter_due_dates(final_df, date.today() - timedelta(days=30 * months_back))
+        
         # Sort and show
         final_df["Sort"] = final_df["Due Date"].apply(lambda x: parse(x, fuzzy=True) if pd.notna(x) else pd.NaT)
         final_df = final_df.sort_values(by="Sort", ascending=True).drop(columns=["Sort"])
-
+        
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
 
