@@ -225,7 +225,7 @@ def find_action(df):
 
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
-st.sidebar.image("firm_logo.png", use_container_width=True)
+#st.sidebar.image("firm_logo.png", use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
 **About DocketPoint**
