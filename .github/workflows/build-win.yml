@@ -1,0 +1,58 @@
+name: Build Windows EXE
+
+on:
+  push:
+    tags:
+      - "v*.*.*"      # builds when you push a tag like v1.0.0
+  workflow_dispatch:   # allow manual run from Actions tab
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build onefile EXE (PyInstaller)
+        run: |
+          pyinstaller app.py `
+            --name DocketPoint `
+            --noconfirm `
+            --onefile `
+            --noconsole `
+            --collect-data pptx `
+            --collect-data dateutil `
+            --collect-submodules streamlit
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocketPoint-${{ github.ref_name || github.run_number }}-win
+          path: dist/DocketPoint.exe
+
+      # Optional: Attach EXE to a Release when you tag
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DocketPoint ${{ github.ref_name }}
+          files: dist/DocketPoint.exe
