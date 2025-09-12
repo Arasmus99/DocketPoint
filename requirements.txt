@@ -3,3 +3,4 @@ python-pptx
 pandas
 python-dateutil
 openpyxl
+pyinstaller
