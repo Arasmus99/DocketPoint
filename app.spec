@@ -3,17 +3,21 @@
 
 block_cipher = None
 
-from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.utils.hooks import copy_metadata, collect_data_files
+
+# --- Metadata and data collection ---
 datas = []
 datas += copy_metadata('streamlit')
 datas += copy_metadata('altair')
 datas += copy_metadata('validators')
 datas += copy_metadata('pandas')
 datas += copy_metadata('numpy')
+datas += collect_data_files('streamlit')   # ensure Streamlit templates/configs are bundled
 
+# --- Analysis step ---
 a = Analysis(
     ['run_app.py'],   # entry point file
-    pathex=[],
+    pathex=['.'],     # search path (repo root)
     binaries=[],
     datas=datas,
     hiddenimports=[
@@ -30,8 +34,10 @@ a = Analysis(
     noarchive=False,
 )
 
+# --- Python archive ---
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# --- Executable build ---
 exe = EXE(
     pyz,
     a.scripts,
@@ -39,10 +45,10 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='DocketPoint',
+    name='DocketPoint',       # final EXE name (dist/DocketPoint.exe)
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,            # set to True if you want console logs visible
 )
