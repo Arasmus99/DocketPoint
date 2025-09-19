@@ -1,58 +1,40 @@
-name: Build Windows EXE
+name: Build Windows EXE (DocketPoint)
 
 on:
   push:
-    tags:
-      - "v*.*.*"      # builds when you push a tag like v1.0.0
-  workflow_dispatch:   # allow manual run from Actions tab
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: {}   # allow manual runs from the GitHub UI
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
 
     steps:
-      - name: Check out code
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'       # match your local version if different
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install deps
+      - name: Upgrade pip & install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Build onefile EXE (PyInstaller)
+      # Build using the spec file you added (which references run_app.py and copies metadata)
+      - name: Build EXE with PyInstaller
         run: |
-          pyinstaller app.py `
-            --name DocketPoint `
-            --noconfirm `
-            --onefile `
-            --noconsole `
-            --collect-data pptx `
-            --collect-data dateutil `
-            --collect-submodules streamlit
+          pyinstaller app.spec --noconfirm
 
+      # Upload the built EXE as an artifact you can download from the Actions run
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DocketPoint-${{ github.ref_name || github.run_number }}-win
+          name: DocketPoint-EXE
+          # If the EXE name in app.spec is different, change the filename below
           path: dist/DocketPoint.exe
-
-      # Optional: Attach EXE to a Release when you tag
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          name: DocketPoint ${{ github.ref_name }}
-          files: dist/DocketPoint.exe
