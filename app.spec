@@ -9,7 +9,6 @@ from PyInstaller.utils.hooks import copy_metadata, collect_data_files
 datas = []
 datas += copy_metadata('streamlit')
 datas += copy_metadata('altair')
-datas += copy_metadata('validators')
 datas += copy_metadata('pandas')
 datas += copy_metadata('numpy')
 datas += collect_data_files('streamlit')   # ensure Streamlit templates/configs are bundled
