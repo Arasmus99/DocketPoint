@@ -28,7 +28,7 @@ jobs:
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller app.spec --noconfirm --onefile --clean
+          pyinstaller app.spec --noconfirm --clean
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
