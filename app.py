@@ -200,17 +200,33 @@ def find_extension(df):
 
 def find_action(df):
     actions = []
+    date_pattern = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
+
     for _, row in df.iterrows():
         textbox = str(row["Textbox Content"])
-        due_date = str(row["Due Date"])
         action_found = ""
+
+        try:
+            target_date = parse(str(row["Due Date"]), dayfirst=False, fuzzy=True).date()
+        except:
+            actions.append("")
+            continue
+
         for line in textbox.splitlines():
-            if due_date in line:
-                matches = list(re.finditer(re.escape(due_date), line))
-                for match in matches:
-                    start, end = match.span()
-                    before = line[:start].strip()
-                    after = line[end:].strip()
+            line = line.strip()
+            if not line:
+                continue
+
+            for match in date_pattern.finditer(line):
+                try:
+                    line_date = parse(match.group(0), dayfirst=False, fuzzy=True).date()
+                except:
+                    continue
+
+                if line_date == target_date:
+                    before = line[:match.start()].strip()
+                    after = line[match.end():].strip()
+
                     if before:
                         action_found = before
                     elif after:
@@ -218,8 +234,12 @@ def find_action(df):
                     else:
                         action_found = ""
                     break
+
+            if action_found:
                 break
+
         actions.append(action_found)
+
     df["Action"] = actions
     return df
 
