@@ -15,7 +15,7 @@ PATTERNS = {
         r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"
         r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
     ),
-    "application_number": re.compile(r"\b\d{2}/\d{3}[,]?\d{3}\s+[A-Z]{2}\b"),
+    "application_number": re.compile(r"\b(?:US\s*)?\d{2}/\d{3},?\d{3}(?:\s+[A-Z]{2})?\b"),
     "alt_application_number": re.compile(
         r"\b[Pp]\d{11}\s+[A-Z]{2}-\w{1,4}\b"
         r"|\b\d{5,12}(?:[.,]\d+)?\s+[A-Z]{2,3}\b"
