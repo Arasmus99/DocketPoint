@@ -19,10 +19,9 @@ PATTERNS = {
         # U.S. serials/provisionals: 63/818,432 or 63/818432
         r"(?<!\d)(?:US\s*)?\d{2}/\d{3},?\d{3}(?!\d)"
 
-        # EP format: 123793983.0, including when glued to EP
-        r"|(?<!\d)\d{9}\.\d(?!\d)"
+        # EP format: 123793983.0, including glued text like EP123793983.0
         r"|(?<=EP)\d{9}\.\d"
-        r"|(?<=EP1)\d{9}\.\d"
+        r"|(?<!\d)\d{9}\.\d(?!\d)"
 
         # JP format: 2023-579557
         r"|(?<!\d)\d{4}-\d{6}(?!\d)"
@@ -34,26 +33,25 @@ PATTERNS = {
         r"|(?<!\d)\d{2}-\d{4}-\d{7}(?!\d)"
 
         # IN format: 201747008733 / 20247808733
-        r"|(?<!\d)\d{11,12}(?!\d)"
-        r"|(?<=IN1)\s*\d{11,12}"
         r"|(?<=IN1)\d{11,12}"
+        r"|(?<!\d)\d{11,12}(?!\d)"
 
-        # AU format: 2023310177, including when glued after AU1
-        r"|(?<!\d)\d{10}(?!\d)"
+        # AU format: 2023310177, including glued text like AU12023310177
         r"|(?<=AU1)\d{10}"
+        r"|(?<!\d)\d{10}(?!\d)"
 
         # TW format: 114103117
-        r"|(?<!\d)\d{9}(?!\d)"
         r"|(?<=TW1)\d{9}"
+        r"|(?<!\d)\d{9}(?!\d)"
 
         # CA format: 32622841
-        r"|(?<!\d)\d{8}(?!\d)"
-        r"|(?<=CA1)\s*\d{8}"
         r"|(?<=CA1)\d{8}"
+        r"|(?<!\d)\d{8}(?!\d)"
 
-        # NZ format: 1818923, including when glued after NZ
-        r"|(?<!\d)\d{7}(?!\d)"
+        # NZ format: 1818923, including glued text like NZ11818923 or NZ1818923
+        r"|(?<=NZ1)\d{7}"
         r"|(?<=NZ)\d{7}"
+        r"|(?<!\d)\d{7}(?!\d)"
     ),
     "alt_application_number": re.compile(
         r"\b[Pp]\d{11}\s+[A-Z]{2}-\w{1,4}\b"
