@@ -16,16 +16,44 @@ PATTERNS = {
         r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
     ),
     "application_number": re.compile(
-        # U.S. serials, including provisionals: 63/818,432 or 63/818432
-        r"\b(?:US\s*)?\d{2}/\d{3},?\d{3}(?:\s+[A-Z]{2})?\b"
-        # Japan format in these slides: 2023-579557
-        r"|\b\d{4}-\d{6}\b"
-        # South Africa format in these slides: 2025/01545
-        r"|\b\d{4}/\d{5}\b"
-        # Korea format in these slides: 10-2025-7005473
-        r"|\b\d{2}-\d{4}-\d{7}\b"
-        # Taiwan format in these slides: 112127315
-        r"|\b\d{9}\b"
+        # U.S. serials/provisionals: 63/818,432 or 63/818432
+        r"(?<!\d)(?:US\s*)?\d{2}/\d{3},?\d{3}(?!\d)"
+
+        # EP format: 123793983.0, including when glued to EP
+        r"|(?<!\d)\d{9}\.\d(?!\d)"
+        r"|(?<=EP)\d{9}\.\d"
+        r"|(?<=EP1)\d{9}\.\d"
+
+        # JP format: 2023-579557
+        r"|(?<!\d)\d{4}-\d{6}(?!\d)"
+
+        # ZA format: 2025/01545
+        r"|(?<!\d)\d{4}/\d{5}(?!\d)"
+
+        # KR format: 10-2025-7005473
+        r"|(?<!\d)\d{2}-\d{4}-\d{7}(?!\d)"
+
+        # IN format: 201747008733 / 20247808733
+        r"|(?<!\d)\d{11,12}(?!\d)"
+        r"|(?<=IN1)\s*\d{11,12}"
+        r"|(?<=IN1)\d{11,12}"
+
+        # AU format: 2023310177, including when glued after AU1
+        r"|(?<!\d)\d{10}(?!\d)"
+        r"|(?<=AU1)\d{10}"
+
+        # TW format: 114103117
+        r"|(?<!\d)\d{9}(?!\d)"
+        r"|(?<=TW1)\d{9}"
+
+        # CA format: 32622841
+        r"|(?<!\d)\d{8}(?!\d)"
+        r"|(?<=CA1)\s*\d{8}"
+        r"|(?<=CA1)\d{8}"
+
+        # NZ format: 1818923, including when glued after NZ
+        r"|(?<!\d)\d{7}(?!\d)"
+        r"|(?<=NZ)\d{7}"
     ),
     "alt_application_number": re.compile(
         r"\b[Pp]\d{11}\s+[A-Z]{2}-\w{1,4}\b"
@@ -85,7 +113,6 @@ def extract_entries_from_textbox(text, months_back=0):
     for line in lines:
         clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
         clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_line)
-        clean_line = clean_line.replace(",", "")
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
             entry["docket_number"] = PATTERNS["docket_number"].search(clean_line).group(0)
