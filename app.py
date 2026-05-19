@@ -15,10 +15,13 @@ PATTERNS = {
         r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"
         r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
     ),
-    "application_number": re.compile(r"\b(?:US\s*)?\d{2}/\d{3},?\d{3}(?:\s+[A-Z]{2})?\b"),
+        "application_number": re.compile(
+        r"\b(?:US\s*)?\d{2}/\d{3},?\d{3}(?:\s+[A-Z]{2})?\b"
+    ),
     "alt_application_number": re.compile(
         r"\b[Pp]\d{11}\s+[A-Z]{2}-\w{1,4}\b"
-        r"|\b\d{5,12}(?:[.,]\d+)?\s+[A-Z]{2,3}\b"
+        r"|\b(?:EP|CN|JP|KR|CA|AU|BR|MX|IN|IL|SG|HK|TW|NZ|ZA|EA|RU|PH|ID|MY|TH|VN|AR|CL|CO|PE|GB|DE|FR|ES|IT|NL|SE|DK|FI|NO)\s*[-/]?\s*\d{5,14}(?:[.,/-]\d+)?[A-Z]?\b"
+        r"|\b\d{5,14}(?:[.,/-]\d+)?[A-Z]?\s+(?:EP|CN|JP|KR|CA|AU|BR|MX|IN|IL|SG|HK|TW|NZ|ZA|EA|RU|PH|ID|MY|TH|VN|AR|CL|CO|PE|GB|DE|FR|ES|IT|NL|SE|DK|FI|NO)(?:-\w{1,4})?\b"
     ),
     "pct_number": re.compile(r"PCT/[A-Z]{2}\d{4}/\d{6}"),
     "wipo_number": re.compile(r"\bWO\d{4}/\d{6}\b"),
