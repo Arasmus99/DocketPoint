@@ -15,16 +15,24 @@ PATTERNS = {
         r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"
         r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
     ),
-        "application_number": re.compile(
+    "application_number": re.compile(
+        # U.S. serials, including provisionals: 63/818,432 or 63/818432
         r"\b(?:US\s*)?\d{2}/\d{3},?\d{3}(?:\s+[A-Z]{2})?\b"
+        # Japan format in these slides: 2023-579557
+        r"|\b\d{4}-\d{6}\b"
+        # South Africa format in these slides: 2025/01545
+        r"|\b\d{4}/\d{5}\b"
+        # Korea format in these slides: 10-2025-7005473
+        r"|\b\d{2}-\d{4}-\d{7}\b"
+        # Taiwan format in these slides: 112127315
+        r"|\b\d{9}\b"
     ),
     "alt_application_number": re.compile(
         r"\b[Pp]\d{11}\s+[A-Z]{2}-\w{1,4}\b"
-        r"|\b(?:EP|CN|JP|KR|CA|AU|BR|MX|IN|IL|SG|HK|TW|NZ|ZA|EA|RU|PH|ID|MY|TH|VN|AR|CL|CO|PE|GB|DE|FR|ES|IT|NL|SE|DK|FI|NO)\s*[-/]?\s*\d{5,14}(?:[.,/-]\d+)?[A-Z]?\b"
-        r"|\b\d{5,14}(?:[.,/-]\d+)?[A-Z]?\s+(?:EP|CN|JP|KR|CA|AU|BR|MX|IN|IL|SG|HK|TW|NZ|ZA|EA|RU|PH|ID|MY|TH|VN|AR|CL|CO|PE|GB|DE|FR|ES|IT|NL|SE|DK|FI|NO)(?:-\w{1,4})?\b"
+        r"|\b\d{5,12}(?:[.,/-]\d+)?\s+[A-Z]{2,3}\b"
     ),
-    "pct_number": re.compile(r"PCT/[A-Z]{2}\d{4}/\d{6}"),
-    "wipo_number": re.compile(r"\bWO\d{4}/\d{6}\b"),
+    "pct_number": re.compile(r"\bPCT/[A-Z]{2}\d{4}/\d{6}\b"),
+    "wipo_number": re.compile(r"\bWO\s*\d{4}/\d{6}\b"),
     "date": re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
 }
 
