@@ -125,10 +125,11 @@ COUNTRY_APP_PATTERNS = {
         # Handles:
         # 1818923
         # NZ1818923
+        # NZ1 1818923
         # NZ11818923, where the first "1" is part of the client ref and the app is 1818923
-        r"(?<=NZ1)\d{7}(?!\d)"
-        r"|(?<=NZ)\d{7}(?!\d)"
-        r"|(?<![\d-])\d{7}(?!\d)"
+        r"NZ1\s*(\d{7})(?!\d)"
+        r"|NZ\s*(\d{7})(?!\d)"
+        r"|(?<![\d-])(\d{7})(?!\d)"
     ),
 }
 
@@ -175,6 +176,19 @@ def get_country_from_docket(docket_number):
 def first_regex_match(pattern, text):
     if not pattern or not text:
         return None
+
+    match = pattern.search(text)
+    if not match:
+        return None
+
+    # Prefer captured groups when the regex captures only the app number.
+    # Example: NZ11818923 -> group captures 1818923, not the full NZ11818923 string.
+    if match.groups():
+        for group in match.groups():
+            if group:
+                return normalize_application_number(group)
+
+    return normalize_application_number(match.group(0))
 
     match = pattern.search(text)
     if not match:
