@@ -15,54 +15,209 @@ PATTERNS = {
         r"|\b\d{4}[.-]\d{4}-?[A-Z]{2}\d*\b"
         r"|\b\d{4}-\d{4}-[A-Z]{3}\b"
     ),
+
     "application_number": re.compile(
         # U.S. serials/provisionals: 63/818,432 or 63/818432
         r"(?<!\d)(?:US\s*)?\d{2}/\d{3},?\d{3}(?!\d)"
 
-        # EP format: 123793983.0, including glued text like EP123793983.0
-        r"|(?<=EP)\d{9}\.\d"
-        r"|(?<!\d)\d{9}\.\d(?!\d)"
+        # EP format: 123793983.0
+        r"|(?<=EP)\d{9}\.\d(?!\d)"
+        r"|(?<![\d-])\d{9}\.\d(?!\d)"
 
         # JP format: 2023-579557
-        r"|(?<!\d)\d{4}-\d{6}(?!\d)"
+        r"|(?<=JP1)\d{4}-\d{6}(?!\d)"
+        r"|(?<![\d-])\d{4}-\d{6}(?!\d)"
 
         # ZA format: 2025/01545
-        r"|(?<!\d)\d{4}/\d{5}(?!\d)"
+        r"|(?<=ZA1)\d{4}/\d{5}(?!\d)"
+        r"|(?<![\d-])\d{4}/\d{5}(?!\d)"
 
         # KR format: 10-2025-7005473
-        r"|(?<!\d)\d{2}-\d{4}-\d{7}(?!\d)"
+        r"|(?<=KR1)\d{2}-\d{4}-\d{7}(?!\d)"
+        r"|(?<![\d-])\d{2}-\d{4}-\d{7}(?!\d)"
 
         # IN format: 201747008733 / 20247808733
-        r"|(?<=IN1)\d{11,12}"
-        r"|(?<!\d)\d{11,12}(?!\d)"
+        r"|(?<=IN1)\d{11,12}(?!\d)"
+        r"|(?<![\d-])\d{11,12}(?!\d)"
 
-        # AU format: 2023310177, including glued text like AU12023310177
-        r"|(?<=AU1)\d{10}"
-        r"|(?<!\d)\d{10}(?!\d)"
+        # AU format: 2023310177
+        r"|(?<=AU1)\d{10}(?!\d)"
+        r"|(?<![\d-])\d{10}(?!\d)"
 
         # TW format: 114103117
-        r"|(?<=TW1)\d{9}"
-        r"|(?<!\d)\d{9}(?!\d)"
+        r"|(?<=TW1)\d{9}(?!\d)"
+        r"|(?<![\d-])\d{9}(?!\d)"
 
         # CA format: 32622841
-        r"|(?<=CA1)\d{8}"
-        r"|(?<!\d)\d{8}(?!\d)"
+        r"|(?<=CA1)\d{8}(?!\d)"
+        r"|(?<![\d-])\d{8}(?!\d)"
 
-        # NZ format: 1818923, including glued text like NZ11818923 or NZ1818923
-        r"|(?<=NZ1)\d{7}"
-        r"|(?<=NZ)\d{7}"
-        r"|(?<!\d)\d{7}(?!\d)"
+        # NZ format: 1818923
+        r"|(?<=NZ1)\d{7}(?!\d)"
+        r"|(?<=NZ)\d{7}(?!\d)"
+        r"|(?<![\d-])\d{7}(?!\d)"
     ),
+
     "alt_application_number": re.compile(
         r"\b[Pp]\d{11}\s+[A-Z]{2}-\w{1,4}\b"
         r"|\b\d{5,12}(?:[.,/-]\d+)?\s+[A-Z]{2,3}\b"
     ),
+
     "pct_number": re.compile(r"\bPCT/[A-Z]{2}\d{4}/\d{6}\b"),
     "wipo_number": re.compile(r"\bWO\s*\d{4}/\d{6}\b"),
     "date": re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
 }
 
+# Country-specific application-number fallbacks.
+# These are used after the docket country is known, e.g.,
+# 01394-0005-00NZ -> NZ -> look for NZ-style app number.
+COUNTRY_APP_PATTERNS = {
+    "US": re.compile(r"(?<!\d)(?:US\s*)?\d{2}/\d{3},?\d{3}(?!\d)"),
+
+    "EP": re.compile(
+        r"(?<=EP)\d{9}\.\d(?!\d)"
+        r"|(?<![\d-])\d{9}\.\d(?!\d)"
+    ),
+
+    "JP": re.compile(
+        r"(?<=JP1)\d{4}-\d{6}(?!\d)"
+        r"|(?<=JP)\d{4}-\d{6}(?!\d)"
+        r"|(?<![\d-])\d{4}-\d{6}(?!\d)"
+    ),
+
+    "ZA": re.compile(
+        r"(?<=ZA1)\d{4}/\d{5}(?!\d)"
+        r"|(?<=ZA)\d{4}/\d{5}(?!\d)"
+        r"|(?<![\d-])\d{4}/\d{5}(?!\d)"
+    ),
+
+    "KR": re.compile(
+        r"(?<=KR1)\d{2}-\d{4}-\d{7}(?!\d)"
+        r"|(?<=KR)\d{2}-\d{4}-\d{7}(?!\d)"
+        r"|(?<![\d-])\d{2}-\d{4}-\d{7}(?!\d)"
+    ),
+
+    "IN": re.compile(
+        r"(?<=IN1)\s*\d{11,12}(?!\d)"
+        r"|(?<=IN)\s*\d{11,12}(?!\d)"
+        r"|(?<![\d-])\d{11,12}(?!\d)"
+    ),
+
+    "AU": re.compile(
+        r"(?<=AU1)\d{10}(?!\d)"
+        r"|(?<=AU)\d{10}(?!\d)"
+        r"|(?<![\d-])\d{10}(?!\d)"
+    ),
+
+    "TW": re.compile(
+        r"(?<=TW1)\d{9}(?!\d)"
+        r"|(?<=TW)\d{9}(?!\d)"
+        r"|(?<![\d-])\d{9}(?!\d)"
+    ),
+
+    "CA": re.compile(
+        r"(?<=CA1)\s*\d{8}(?!\d)"
+        r"|(?<=CA)\s*\d{8}(?!\d)"
+        r"|(?<![\d-])\d{8}(?!\d)"
+    ),
+
+    "NZ": re.compile(
+        # Handles:
+        # 1818923
+        # NZ1818923
+        # NZ11818923, where the first "1" is part of the client ref and the app is 1818923
+        r"(?<=NZ1)\d{7}(?!\d)"
+        r"|(?<=NZ)\d{7}(?!\d)"
+        r"|(?<![\d-])\d{7}(?!\d)"
+    ),
+}
+
 SKIP_PHRASES = ["PENDING", "ABANDONED", "WITHDRAWN", "GRANTED", "ISSUED", "STRUCTURE"]
+
+
+# === Text cleaning helpers ===
+def clean_text_for_matching(text):
+    clean_text = text.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
+    clean_text = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_text)
+    return clean_text.strip()
+
+
+def normalize_application_number(candidate):
+    if not candidate:
+        return None
+
+    candidate = candidate.strip()
+    candidate = re.sub(r"\s+", "", candidate)
+
+    # Display US serials without a leading country prefix.
+    candidate = re.sub(r"^US", "", candidate, flags=re.IGNORECASE)
+
+    return candidate.strip()
+
+
+def get_country_from_docket(docket_number):
+    if not docket_number:
+        return None
+
+    # Example: 01394-0005-00NZ -> NZ
+    match = re.search(r"-\d{2}([A-Z]{2,4})\d*$", docket_number)
+    if match:
+        return match.group(1)
+
+    # Fallback for unusual docket formats.
+    match = re.search(r"([A-Z]{2,4})\d*$", docket_number)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def first_regex_match(pattern, text):
+    if not pattern or not text:
+        return None
+
+    match = pattern.search(text)
+    if not match:
+        return None
+
+    return normalize_application_number(match.group(0))
+
+
+def extract_application_number_from_text(lines, docket_number):
+    clean_lines = [clean_text_for_matching(line) for line in lines]
+    full_clean_text = "\n".join(clean_lines)
+
+    country = get_country_from_docket(docket_number)
+
+    # First: use country-specific logic when the docket tells us the jurisdiction.
+    if country in COUNTRY_APP_PATTERNS:
+        candidate = first_regex_match(COUNTRY_APP_PATTERNS[country], full_clean_text)
+        if candidate:
+            return candidate
+
+    # Second: use the general application-number pattern line by line.
+    for clean_line in clean_lines:
+        candidate = first_regex_match(PATTERNS["application_number"], clean_line)
+        if candidate:
+            return candidate
+
+    # Third: try the general pattern on the full textbox, useful when PPT joins lines together.
+    candidate = first_regex_match(PATTERNS["application_number"], full_clean_text)
+    if candidate:
+        return candidate
+
+    # Fourth: older alternate formats.
+    for clean_line in clean_lines:
+        candidate = first_regex_match(PATTERNS["alt_application_number"], clean_line)
+        if candidate:
+            return candidate
+
+    candidate = first_regex_match(PATTERNS["alt_application_number"], full_clean_text)
+    if candidate:
+        return candidate
+
+    return None
+
 
 # === Recursive text extraction for GroupShapes ===
 def extract_texts_from_shape_recursive(shape):
@@ -76,14 +231,17 @@ def extract_texts_from_shape_recursive(shape):
             texts.append(text)
     return texts
 
+
 def extract_text_from_shape(shape):
     if shape.has_text_frame:
         return shape.text.strip()
     return ""
 
+
 def should_include(text):
     upper_text = text.upper()
     return not any(phrase in upper_text for phrase in SKIP_PHRASES)
+
 
 def get_earliest_due_date(dates_str):
     if not isinstance(dates_str, str):
@@ -93,6 +251,7 @@ def get_earliest_due_date(dates_str):
         return min(dates) if dates else pd.NaT
     except:
         return pd.NaT
+
 
 def extract_entries_from_textbox(text, months_back=0):
     entries = []
@@ -108,20 +267,16 @@ def extract_entries_from_textbox(text, months_back=0):
         "raw_text": "\n".join(lines)
     }
 
+    # First pass: extract docket, PCT, WIPO, and dates.
+    # Application number is handled after docket extraction so we can use country-specific parsing.
     for line in lines:
-        clean_line = line.replace(" /,", "/").replace("/", "/").replace(",,", ",").replace(" /", "/")
-        clean_line = re.sub(r"[^0-9A-Za-z/,\.\s-]", "", clean_line)
+        clean_line = clean_text_for_matching(line)
 
         if not entry["docket_number"] and PATTERNS["docket_number"].search(clean_line):
             entry["docket_number"] = PATTERNS["docket_number"].search(clean_line).group(0)
 
         if not entry["pct_number"] and PATTERNS["pct_number"].search(clean_line):
             entry["pct_number"] = PATTERNS["pct_number"].search(clean_line).group(0)
-
-        if not entry["application_number"] and PATTERNS["application_number"].search(clean_line):
-            entry["application_number"] = PATTERNS["application_number"].search(clean_line).group(0)
-        elif not entry["application_number"] and PATTERNS["alt_application_number"].search(clean_line):
-            entry["application_number"] = PATTERNS["alt_application_number"].search(clean_line).group(0)
 
         if not entry["wipo_number"] and PATTERNS["wipo_number"].search(clean_line):
             entry["wipo_number"] = PATTERNS["wipo_number"].search(clean_line).group(0)
@@ -133,6 +288,9 @@ def extract_entries_from_textbox(text, months_back=0):
             except:
                 continue
 
+    # Second pass: extract application number using docket-country context.
+    entry["application_number"] = extract_application_number_from_text(lines, entry["docket_number"])
+
     if not (entry["docket_number"] or entry["application_number"] or entry["pct_number"] or entry["wipo_number"]):
         return []
 
@@ -140,6 +298,7 @@ def extract_entries_from_textbox(text, months_back=0):
         entries.append(entry)
 
     return entries
+
 
 def extract_from_pptx(upload, months_back):
     prs = Presentation(upload)
@@ -164,10 +323,19 @@ def extract_from_pptx(upload, months_back):
                     })
 
     if not results:
-        return pd.DataFrame(columns=["Slide", "Textbox Content", "Docket Number", "Application Number", "PCT Number", "WIPO Number", "Due Dates"])
+        return pd.DataFrame(columns=[
+            "Slide",
+            "Textbox Content",
+            "Docket Number",
+            "Application Number",
+            "PCT Number",
+            "WIPO Number",
+            "Due Dates"
+        ])
 
     df = pd.DataFrame(results)
     return df
+
 
 # === Helper functions for date cleaning and actions ===
 def filter_due_dates(df, cutoff_date):
@@ -181,6 +349,7 @@ def filter_due_dates(df, cutoff_date):
         except:
             continue
     return pd.DataFrame(filtered_rows)
+
 
 def date_split(df):
     split_rows = []
@@ -200,18 +369,23 @@ def date_split(df):
                 continue
     return pd.DataFrame(split_rows)
 
+
 def find_extension(df):
     df = df.copy()
     df["Extension"] = None
     keyword_variants = ["ext", "extension"]
     date_pattern = re.compile(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}")
+
     for idx, row in df.iterrows():
         due_dates_str = row["Due Dates"]
         textbox = row["Textbox Content"]
+
         if not isinstance(due_dates_str, str) or len(re.findall(r'\d{1,2}/\d{1,2}/\d{2,4}', due_dates_str)) < 2:
             continue
+
         lines = textbox.splitlines()
         ext_date = None
+
         for line in lines:
             line_lower = line.lower()
             for kw in keyword_variants:
@@ -227,12 +401,15 @@ def find_extension(df):
                             continue
             if ext_date:
                 break
+
         if ext_date:
             current_dates = [d.strip() for d in due_dates_str.split(";") if d.strip()]
             filtered_dates = [d for d in current_dates if d != ext_date]
             df.at[idx, "Due Dates"] = "; ".join(filtered_dates)
             df.at[idx, "Extension"] = ext_date
+
     return df
+
 
 def find_action(df):
     actions = []
@@ -279,9 +456,11 @@ def find_action(df):
     df["Action"] = actions
     return df
 
+
 # === Streamlit UI ===
 st.title("\U0001F4CA DocketPoint")
-#st.sidebar.image("firm_logo.png", use_container_width=True)
+
+# st.sidebar.image("firm_logo.png", use_container_width=True)
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
 **About DocketPoint**
@@ -292,16 +471,29 @@ Use the slider to filter by due date range.
 """)
 st.sidebar.markdown("---")
 
-ppt_files = st.file_uploader("Upload one or more PowerPoint (.pptx) files", type="pptx", accept_multiple_files=True)
-months_back = st.slider("Include due dates up to this many months in the past:", 0, 24, 0)
+ppt_files = st.file_uploader(
+    "Upload one or more PowerPoint (.pptx) files",
+    type="pptx",
+    accept_multiple_files=True
+)
+
+months_back = st.slider(
+    "Include due dates up to this many months in the past:",
+    0,
+    24,
+    0
+)
 
 if ppt_files:
     all_dfs = []
+
     for ppt_file in ppt_files:
         df = extract_from_pptx(ppt_file, months_back)
+
         if df.empty:
             st.warning(f"⚠️ No extractable data found in {ppt_file.name}.")
             continue
+
         df["Client"] = ppt_file.name.replace(".pptx", "")
         all_dfs.append(df)
 
@@ -313,9 +505,11 @@ if ppt_files:
         final_df = date_split(final_df)
         final_df = find_action(final_df)
         final_df = filter_due_dates(final_df, date.today() - timedelta(days=30 * months_back))
-        
+
         # Sort and show
-        final_df["Sort"] = final_df["Due Date"].apply(lambda x: parse(x, fuzzy=True) if pd.notna(x) else pd.NaT)
+        final_df["Sort"] = final_df["Due Date"].apply(
+            lambda x: parse(x, fuzzy=True) if pd.notna(x) else pd.NaT
+        )
         final_df = final_df.sort_values(by="Sort", ascending=True).drop(columns=["Sort"])
 
         # === Rearrange columns ===
@@ -332,12 +526,12 @@ if ppt_files:
             # "Due Dates",  # Optional: exclude from display
             "Textbox Content"
         ]
-        
+
         # Include all existing columns, and preserve extras if added in the future
         final_cols = [col for col in desired_order if col in final_df.columns]
         other_cols = [col for col in final_df.columns if col not in final_cols]
-        
-        final_df = final_df[final_cols + other_cols]  # Ensure no columns are dropped accidentally
+
+        final_df = final_df[final_cols + other_cols]
 
         st.success(f"✅ Extracted {len(final_df)} entries from {len(all_dfs)} file(s).")
         st.dataframe(final_df, use_container_width=True)
@@ -345,4 +539,9 @@ if ppt_files:
         output = BytesIO()
         final_df.to_excel(output, index=False)
         output.seek(0)
-        st.download_button("\U0001F4E5 Download Excel", output, file_name="combined_extracted_data.xlsx")
+
+        st.download_button(
+            "\U0001F4E5 Download Excel",
+            output,
+            file_name="combined_extracted_data.xlsx"
+        )
