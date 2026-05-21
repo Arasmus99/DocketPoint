@@ -10,6 +10,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+
+# ===========================================================================
+#  1) EXTRACTION ENGINE  (was docket_extract.py)
+# ===========================================================================
+
 # --------------------------------------------------------------------------- #
 #  Docket / client-code patterns
 # --------------------------------------------------------------------------- #
@@ -293,6 +298,16 @@ def extract_cases(pptx_source):
 # ===========================================================================
 #  2) EXCEL BUILDER  (was build_excel.py)
 # ===========================================================================
+"""
+build_excel.py
+--------------
+Turn extracted cases into a formatted two-sheet workbook:
+  * "Deadlines" – one row per dated deadline (calendar-ready), sorted by date.
+  * "All Cases" – one row per case with every identifier we pulled.
+
+Used by both the CLI (run_extract.py) and the Streamlit app.
+"""
+
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
@@ -307,8 +322,15 @@ def _join_deadlines(case):
     return "; ".join(parts)
 
 
-def cases_to_rows(cases, client):
-    """Build (deadline_rows, case_rows) as lists of dicts."""
+def cases_to_rows(cases, client, deadline_cutoff=None):
+    """
+    Build (deadline_rows, case_rows) as lists of dicts.
+
+    deadline_cutoff: optional datetime.date. When given, deadline rows whose
+    due date falls *before* this date are dropped from the Deadlines list.
+    The All Cases list is always complete (it's a full inventory, not a
+    calendar), so the cutoff never removes a case from it.
+    """
     case_rows, deadline_rows, seen = [], [], set()
 
     for c in cases:
@@ -341,6 +363,11 @@ def cases_to_rows(cases, client):
             })
 
     deadline_rows.sort(key=lambda r: datetime.strptime(r["Due Date"], "%m/%d/%Y"))
+    if deadline_cutoff is not None:
+        deadline_rows = [
+            r for r in deadline_rows
+            if datetime.strptime(r["Due Date"], "%m/%d/%Y").date() >= deadline_cutoff
+        ]
     return deadline_rows, case_rows
 
 
@@ -376,8 +403,8 @@ def _write_sheet(ws, rows, columns, date_cols=()):
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{ws.max_row}"
 
 
-def build_workbook(cases, client):
-    deadline_rows, case_rows = cases_to_rows(cases, client)
+def build_workbook(cases, client, deadline_cutoff=None):
+    deadline_rows, case_rows = cases_to_rows(cases, client, deadline_cutoff)
 
     wb = Workbook()
     ws1 = wb.active
@@ -395,9 +422,9 @@ def build_workbook(cases, client):
     return wb
 
 
-def workbook_bytes(cases, client):
+def workbook_bytes(cases, client, deadline_cutoff=None):
     buf = BytesIO()
-    build_workbook(cases, client).save(buf)
+    build_workbook(cases, client, deadline_cutoff).save(buf)
     buf.seek(0)
     return buf
 
@@ -407,9 +434,6 @@ def workbook_bytes(cases, client):
 """
 DocketPoint — PowerPoint case-structure extractor
 ==================================================
-Run locally with:   streamlit run app.py
-
-Keep app.py, docket_extract.py, and build_excel.py in the same folder.
 
 Upload one or more "Case Structure" .pptx decks; the app extracts every case's
 docket / application / PCT / WIPO numbers, filing dates, and dated deadlines,
@@ -462,20 +486,17 @@ for f in ppt_files:
 if not all_cases:
     st.stop()
 
-# Build combined tables across all uploaded files
+# Build combined tables across all uploaded files.
+# The cutoff is applied here at the source, so the on-screen Deadlines table and
+# the downloaded Excel always agree with where the slider sits.
 deadline_rows, case_rows = [], []
 for client, cases in all_cases:
-    d_rows, c_rows = cases_to_rows(cases, client)
+    d_rows, c_rows = cases_to_rows(cases, client, deadline_cutoff=cutoff)
     deadline_rows += d_rows
     case_rows += c_rows
 
 deadlines_df = pd.DataFrame(deadline_rows)
 cases_df = pd.DataFrame(case_rows)
-
-# Apply the past-deadline filter to the Deadlines view only
-if not deadlines_df.empty:
-    parsed = pd.to_datetime(deadlines_df["Due Date"], format="%m/%d/%Y", errors="coerce")
-    deadlines_df = deadlines_df[parsed.dt.date >= cutoff].reset_index(drop=True)
 
 st.success(
     f"\u2705 Extracted {len(cases_df)} cases and "
@@ -496,7 +517,7 @@ for _, cases in all_cases:
 client_label = all_cases[0][0] if len(all_cases) == 1 else "Combined"
 
 buf = BytesIO()
-build_workbook(combined, client_label).save(buf)
+build_workbook(combined, client_label, deadline_cutoff=cutoff).save(buf)
 buf.seek(0)
 
 st.download_button(
