@@ -1,6 +1,8 @@
 import re
 from io import BytesIO
-from datetime import date, timedelta, datetime
+from datetime import date, datetime, timedelta, timezone
+import calendar
+import hashlib
 
 import pandas as pd
 import streamlit as st
@@ -11,10 +13,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 
-# ===========================================================================
-#  1) EXTRACTION ENGINE  (was docket_extract.py)
-# ===========================================================================
-
+# --- extraction engine ---
 # --------------------------------------------------------------------------- #
 #  Docket / client-code patterns
 # --------------------------------------------------------------------------- #
@@ -295,10 +294,8 @@ def extract_cases(pptx_source):
                     cases.append(case)
     return cases
 
-# ===========================================================================
-#  2) EXCEL BUILDER  (was build_excel.py)
-# ===========================================================================
 
+# --- excel + calendar builder ---
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
 BODY_FONT = Font(name="Arial", size=10)
@@ -418,20 +415,141 @@ def workbook_bytes(cases, client, deadline_cutoff=None):
     buf.seek(0)
     return buf
 
+
 # ===========================================================================
-#  3) STREAMLIT UI  (was app.py)
+#  Calendar outputs:  .ics file  +  in-app month grid
 # ===========================================================================
-"""
-DocketPoint — PowerPoint case-structure extractor
-==================================================
 
-Upload one or more "Case Structure" .pptx decks; the app extracts every case's
-docket / application / PCT / WIPO numbers, filing dates, and dated deadlines,
-shows them in two tables, and lets you download a formatted Excel workbook
-(Deadlines sheet + All Cases sheet).
-"""
+def _ics_escape(text):
+    return (str(text).replace("\\", "\\\\").replace(";", "\\;")
+            .replace(",", "\\,").replace("\n", "\\n"))
 
 
+def _ics_fold(line):
+    # RFC 5545: fold lines longer than 75 octets; continuation starts with a space.
+    if len(line) <= 73:
+        return line
+    chunks, s = [], line
+    while len(s) > 73:
+        chunks.append(s[:73])
+        s = " " + s[73:]
+    chunks.append(s)
+    return "\r\n".join(chunks)
+
+
+def make_ics(deadline_rows, reminder_days=0):
+    """Build an iCalendar (.ics) string: one all-day VEVENT per deadline."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = ["BEGIN:VCALENDAR", "VERSION:2.0",
+           "PRODID:-//DocketPoint//Patent Docketing//EN",
+           "CALSCALE:GREGORIAN", "METHOD:PUBLISH"]
+
+    for r in deadline_rows:
+        d = datetime.strptime(r["Due Date"], "%m/%d/%Y").date()
+        uid = hashlib.md5(
+            f"{r['Docket Number']}|{r['Action']}|{r['Due Date']}".encode()
+        ).hexdigest()
+        summary = _ics_escape(
+            f"{r['Action']} \u2014 {r['Docket Number']} ({r.get('Country', '')})")
+        desc = _ics_escape(
+            f"Application: {r.get('Application Number', '')}\n"
+            f"Client: {r.get('Client', '')}\n"
+            f"Slide: {r.get('Slide', '')}\n"
+            f"Due: {r['Due Date']}")
+        out += ["BEGIN:VEVENT",
+                f"UID:{uid}@docketpoint",
+                f"DTSTAMP:{stamp}",
+                f"DTSTART;VALUE=DATE:{d:%Y%m%d}",
+                f"DTEND;VALUE=DATE:{d + timedelta(days=1):%Y%m%d}",
+                f"SUMMARY:{summary}",
+                f"DESCRIPTION:{desc}",
+                "TRANSP:TRANSPARENT"]
+        if reminder_days and reminder_days > 0:
+            out += ["BEGIN:VALARM", "ACTION:DISPLAY",
+                    f"TRIGGER:-P{int(reminder_days)}D",
+                    f"DESCRIPTION:{summary}", "END:VALARM"]
+        out.append("END:VEVENT")
+
+    out.append("END:VCALENDAR")
+    return "\r\n".join(_ics_fold(line) for line in out) + "\r\n"
+
+
+def deadline_months(deadline_rows):
+    """Sorted unique (year, month) pairs that contain at least one deadline."""
+    months = {(datetime.strptime(r["Due Date"], "%m/%d/%Y").year,
+               datetime.strptime(r["Due Date"], "%m/%d/%Y").month)
+              for r in deadline_rows}
+    return sorted(months)
+
+
+_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+
+def _html_escape(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace("'", "&#39;"))
+
+
+def month_grid_html(deadline_rows, year, month):
+    """Return an HTML month calendar with deadlines placed on their due dates."""
+    events = {}
+    for r in deadline_rows:
+        d = datetime.strptime(r["Due Date"], "%m/%d/%Y").date()
+        if d.year == year and d.month == month:
+            events.setdefault(d.day, []).append(r)
+
+    cal = calendar.Calendar(firstweekday=6)  # Sunday first
+    weeks = cal.monthdayscalendar(year, month)
+
+    css = (
+        "<style>"
+        ".dp-cal{border-collapse:collapse;width:100%;font-family:Arial,sans-serif;"
+        "table-layout:fixed}"
+        ".dp-cal th{background:#1F3864;color:#fff;padding:6px;font-size:12px;"
+        "border:1px solid #d9d9d9}"
+        ".dp-cal td{vertical-align:top;height:104px;border:1px solid #d9d9d9;"
+        "padding:4px;width:14.28%}"
+        ".dp-cal td.empty{background:#fafafa}"
+        ".dp-day{font-size:12px;color:#999;text-align:right}"
+        ".dp-day.has{color:#1F3864;font-weight:bold}"
+        ".dp-ev{background:#E8EEF7;border-left:3px solid #1F3864;border-radius:3px;"
+        "padding:2px 5px;margin-top:3px;font-size:11px;line-height:1.25;color:#1a1a1a}"
+        ".dp-ev b{display:block;font-size:11px}"
+        "</style>"
+    )
+
+    html = [css,
+            f"<h4 style='font-family:Arial;margin:4px 0 8px'>"
+            f"{calendar.month_name[month]} {year}</h4>",
+            "<table class='dp-cal'><thead><tr>"]
+    html += [f"<th>{w}</th>" for w in _WEEKDAYS]
+    html.append("</tr></thead><tbody>")
+
+    for week in weeks:
+        html.append("<tr>")
+        for day in week:
+            if day == 0:
+                html.append("<td class='empty'></td>")
+                continue
+            evs = events.get(day, [])
+            day_cls = "dp-day has" if evs else "dp-day"
+            cell = [f"<td><div class='{day_cls}'>{day}</div>"]
+            for r in evs:
+                tip = (f"{r['Action']} \u2014 {r['Docket Number']} "
+                       f"({r.get('Country', '')})  App {r.get('Application Number', '')}")
+                cell.append(
+                    f"<div class='dp-ev' title='{_html_escape(tip)}'>"
+                    f"<b>{_html_escape(r['Docket Number'])}</b>"
+                    f"{_html_escape(r['Action'])}</div>")
+            cell.append("</td>")
+            html.append("".join(cell))
+        html.append("</tr>")
+
+    html.append("</tbody></table>")
+    return "".join(html)
+
+
+# --- streamlit ui ---
 st.set_page_config(page_title="DocketPoint", page_icon="\U0001F4CA", layout="wide")
 st.title("\U0001F4CA DocketPoint")
 
@@ -493,12 +611,26 @@ st.success(
     f"{len(deadlines_df)} deadlines from {len(all_cases)} file(s)."
 )
 
-tab1, tab2 = st.tabs([f"\U0001F5D3\uFE0F Deadlines ({len(deadlines_df)})",
-                      f"\U0001F4C1 All Cases ({len(cases_df)})"])
+
+tab1, tab2, tab3 = st.tabs([f"\U0001F5D3\uFE0F Deadlines ({len(deadlines_df)})",
+                            f"\U0001F4C1 All Cases ({len(cases_df)})",
+                            "\U0001F4C5 Calendar"])
 with tab1:
     st.dataframe(deadlines_df, use_container_width=True, hide_index=True)
 with tab2:
     st.dataframe(cases_df, use_container_width=True, hide_index=True)
+with tab3:
+    months = deadline_months(deadline_rows)
+    if not months:
+        st.info("No deadlines in range to display. Adjust the slider above.")
+    else:
+        choice = st.selectbox(
+            "Month",
+            options=months,
+            format_func=lambda ym: f"{_calmod.month_name[ym[1]]} {ym[0]}",
+        )
+        st.markdown(month_grid_html(deadline_rows, choice[0], choice[1]),
+                    unsafe_allow_html=True)
 
 # Build a single workbook covering all uploaded files
 combined = []
@@ -510,9 +642,23 @@ buf = BytesIO()
 build_workbook(combined, client_label, deadline_cutoff=cutoff).save(buf)
 buf.seek(0)
 
-st.download_button(
-    "\U0001F4E5 Download Excel",
-    buf,
-    file_name=f"{client_label}_Docket_Extract.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+col1, col2 = st.columns(2)
+with col1:
+    st.download_button(
+        "\U0001F4E5 Download Excel",
+        buf,
+        file_name=f"{client_label}_Docket_Extract.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+with col2:
+    reminder_days = st.number_input(
+        "Calendar reminder (days before, 0 = none)",
+        min_value=0, max_value=60, value=14, step=1,
+    )
+    ics_text = make_ics(deadline_rows, reminder_days=int(reminder_days))
+    st.download_button(
+        "\U0001F4C5 Download Calendar (.ics)",
+        ics_text,
+        file_name=f"{client_label}_Deadlines.ics",
+        mime="text/calendar",
+    )
