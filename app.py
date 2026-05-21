@@ -482,6 +482,11 @@ def deadline_months(deadline_rows):
     return sorted(months)
 
 
+def month_label(ym):
+    """(2026, 7) -> 'July 2026'."""
+    return f"{calendar.month_name[ym[1]]} {ym[0]}"
+
+
 _WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 
@@ -611,7 +616,6 @@ st.success(
     f"{len(deadlines_df)} deadlines from {len(all_cases)} file(s)."
 )
 
-
 tab1, tab2, tab3 = st.tabs([f"\U0001F5D3\uFE0F Deadlines ({len(deadlines_df)})",
                             f"\U0001F4C1 All Cases ({len(cases_df)})",
                             "\U0001F4C5 Calendar"])
@@ -624,11 +628,7 @@ with tab3:
     if not months:
         st.info("No deadlines in range to display. Adjust the slider above.")
     else:
-        choice = st.selectbox(
-            "Month",
-            options=months,
-            format_func=lambda ym: f"{_calmod.month_name[ym[1]]} {ym[0]}",
-        )
+        choice = st.selectbox("Month", options=months, format_func=month_label)
         st.markdown(month_grid_html(deadline_rows, choice[0], choice[1]),
                     unsafe_allow_html=True)
 
