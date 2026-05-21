@@ -1,14 +1,3 @@
-"""
-DocketPoint — single-file Streamlit app
-=======================================
-Run locally:            streamlit run app.py
-Deploy on Streamlit Cloud: push this file + requirements.txt to your repo.
-
-Extracts docket / application / PCT / WIPO numbers, filing dates, and dated
-deadlines from patent "Case Structure" PowerPoint decks and exports an Excel
-workbook (Deadlines sheet + All Cases sheet).
-"""
-
 import re
 from io import BytesIO
 from datetime import date, timedelta, datetime
