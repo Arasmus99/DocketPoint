@@ -10,30 +10,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-
-# ===========================================================================
-#  1) EXTRACTION ENGINE  (was docket_extract.py)
-# ===========================================================================
-"""
-docket_extract.py
------------------
-Extraction engine for patent "Case Structure" PowerPoint decks.
-
-Design notes (derived from the actual deck + the deck's own "Key" slide):
-  * Each case lives in its own text box. A box's first docket-looking token is
-    the ATTY REF / docket number, e.g. ``01394-0005-00EP``.
-  * The 2-4 trailing letters of the docket's last hyphen segment give the
-    jurisdiction (country) -> ``EP``.
-  * After the docket comes the CLIENT CODE (``15080-101EP1`` / ``107USP1``),
-    then the application number, filing date, grant number, due dates, notes.
-
-Because the client code and docket both contain digits, we strip those tokens
-out *before* searching for the application number, then apply a
-country-specific pattern. Every pattern below was checked against the real
-formats found in the deck.
-"""
-
-
 # --------------------------------------------------------------------------- #
 #  Docket / client-code patterns
 # --------------------------------------------------------------------------- #
@@ -317,16 +293,6 @@ def extract_cases(pptx_source):
 # ===========================================================================
 #  2) EXCEL BUILDER  (was build_excel.py)
 # ===========================================================================
-"""
-build_excel.py
---------------
-Turn extracted cases into a formatted two-sheet workbook:
-  * "Deadlines" – one row per dated deadline (calendar-ready), sorted by date.
-  * "All Cases" – one row per case with every identifier we pulled.
-
-Used by both the CLI (run_extract.py) and the Streamlit app.
-"""
-
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
