@@ -298,16 +298,6 @@ def extract_cases(pptx_source):
 # ===========================================================================
 #  2) EXCEL BUILDER  (was build_excel.py)
 # ===========================================================================
-"""
-build_excel.py
---------------
-Turn extracted cases into a formatted two-sheet workbook:
-  * "Deadlines" – one row per dated deadline (calendar-ready), sorted by date.
-  * "All Cases" – one row per case with every identifier we pulled.
-
-Used by both the CLI (run_extract.py) and the Streamlit app.
-"""
-
 
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
