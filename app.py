@@ -815,10 +815,17 @@ def month_pdf(deadline_rows, year, month, client_label=""):
                 c.rect(x + 3, ey - pill_h + 11, 2, pill_h, fill=1, stroke=0)
                 c.setFillColorRGB(0.1, 0.1, 0.1)
                 c.setFont("Helvetica-Bold", 6.5)
-                c.drawString(x + 7, ey + 3, _truncate(r["Docket Number"], col_w - 12, 6.5, bold=True))
+                c.drawString(
+                  x + 7,
+                  ey + 3,
+                  _truncate(f"{r.get('Client', '')} — {r['Docket Number']}", col_w - 12, 6.5, bold=True)
+                )
                 c.setFont("Helvetica", 6.5)
-                c.drawString(x + 7, ey - 5,
-                             _truncate(r["Action"], col_w - 12, 6.5))
+                c.drawString(
+                  x + 7,
+                  ey - 5,
+                  _truncate(r["Action"], col_w - 12, 6.5)
+                )
                 ey -= pill_h + 3
 
     # --- Footer ---
@@ -915,12 +922,15 @@ def month_grid_html(deadline_rows, year, month):
             day_cls = "dp-day has" if evs else "dp-day"
             cell = [f"<td><div class='{day_cls}'>{day}</div>"]
             for r in evs:
-                tip = (f"{r['Action']} \u2014 {r['Docket Number']} "
-                       f"({r.get('Country', '')})  App {r.get('Application Number', '')}")
+                tip = (
+                  f"{r.get('Client', '')} — {r['Action']} \u2014 {r['Docket Number']} "
+                  f"({r.get('Country', '')})  App {r.get('Application Number', '')}"
+                )
                 cell.append(
-                    f"<div class='dp-ev' title='{_html_escape(tip)}'>"
-                    f"<b>{_html_escape(r['Docket Number'])}</b>"
-                    f"{_html_escape(r['Action'])}</div>")
+                  f"<div class='dp-ev' title='{_html_escape(tip)}'>"
+                  f"<b>{_html_escape(r.get('Client', ''))} — {_html_escape(r['Docket Number'])}</b>"
+                  f"{_html_escape(r['Action'])}</div>"
+                )
             cell.append("</td>")
             html.append("".join(cell))
         html.append("</tr>")
