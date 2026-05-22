@@ -1025,7 +1025,7 @@ cutoff = date.today() - timedelta(days=int(30.4 * months_back))
 
 all_cases = []
 for f in ppt_files:
-    client = f.name.replace(".pptx", "")
+    client = f.name.rsplit(".", 1)[0].strip().split()[0]
     cases = extract_cases(f)
     if not cases:
         st.warning(f"No extractable cases found in {f.name}.")
