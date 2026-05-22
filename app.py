@@ -1,8 +1,7 @@
 import re
 from io import BytesIO
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 import calendar
-import hashlib
 
 import pandas as pd
 import streamlit as st
@@ -420,58 +419,137 @@ def workbook_bytes(cases, client, deadline_cutoff=None):
 #  Calendar outputs:  .ics file  +  in-app month grid
 # ===========================================================================
 
-def _ics_escape(text):
-    return (str(text).replace("\\", "\\\\").replace(";", "\\;")
-            .replace(",", "\\,").replace("\n", "\\n"))
+# ===========================================================================
+#  Calendar outputs:  printable PDF month  +  in-app HTML month grid
+# ===========================================================================
+
+# Brand palette (shared by the PDF and the on-screen grid)
+NAVY = (0x1F / 255, 0x38 / 255, 0x64 / 255)
+LIGHT = (0xE8 / 255, 0xEE / 255, 0xF7 / 255)
+GREY = (0.6, 0.6, 0.6)
+RULE = (0x85 / 255, 0x85 / 255, 0x85 / 255)
 
 
-def _ics_fold(line):
-    # RFC 5545: fold lines longer than 75 octets; continuation starts with a space.
-    if len(line) <= 73:
-        return line
-    chunks, s = [], line
-    while len(s) > 73:
-        chunks.append(s[:73])
-        s = " " + s[73:]
-    chunks.append(s)
-    return "\r\n".join(chunks)
+def month_pdf(deadline_rows, year, month, client_label=""):
+    """
+    Render a single month as a printable, landscape PDF calendar.
 
+    Returns the PDF as bytes. Pure reportlab (no system libraries), so it
+    renders identically on Streamlit Cloud and any desktop.
+    """
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.pdfgen import canvas as _canvas
+    from reportlab.lib.units import inch
 
-def make_ics(deadline_rows, reminder_days=0):
-    """Build an iCalendar (.ics) string: one all-day VEVENT per deadline."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = ["BEGIN:VCALENDAR", "VERSION:2.0",
-           "PRODID:-//DocketPoint//Patent Docketing//EN",
-           "CALSCALE:GREGORIAN", "METHOD:PUBLISH"]
-
+    # Bucket this month's deadlines by day-of-month.
+    events = {}
     for r in deadline_rows:
         d = datetime.strptime(r["Due Date"], "%m/%d/%Y").date()
-        uid = hashlib.md5(
-            f"{r['Docket Number']}|{r['Action']}|{r['Due Date']}".encode()
-        ).hexdigest()
-        summary = _ics_escape(
-            f"{r['Action']} \u2014 {r['Docket Number']} ({r.get('Country', '')})")
-        desc = _ics_escape(
-            f"Application: {r.get('Application Number', '')}\n"
-            f"Client: {r.get('Client', '')}\n"
-            f"Slide: {r.get('Slide', '')}\n"
-            f"Due: {r['Due Date']}")
-        out += ["BEGIN:VEVENT",
-                f"UID:{uid}@docketpoint",
-                f"DTSTAMP:{stamp}",
-                f"DTSTART;VALUE=DATE:{d:%Y%m%d}",
-                f"DTEND;VALUE=DATE:{d + timedelta(days=1):%Y%m%d}",
-                f"SUMMARY:{summary}",
-                f"DESCRIPTION:{desc}",
-                "TRANSP:TRANSPARENT"]
-        if reminder_days and reminder_days > 0:
-            out += ["BEGIN:VALARM", "ACTION:DISPLAY",
-                    f"TRIGGER:-P{int(reminder_days)}D",
-                    f"DESCRIPTION:{summary}", "END:VALARM"]
-        out.append("END:VEVENT")
+        if d.year == year and d.month == month:
+            events.setdefault(d.day, []).append(r)
 
-    out.append("END:VCALENDAR")
-    return "\r\n".join(_ics_fold(line) for line in out) + "\r\n"
+    weeks = calendar.Calendar(firstweekday=6).monthdayscalendar(year, month)
+
+    buf = BytesIO()
+    page_w, page_h = landscape(letter)            # 792 x 612
+    c = _canvas.Canvas(buf, pagesize=(page_w, page_h))
+
+    margin = 0.4 * inch
+    title_h = 0.55 * inch
+    foot_h = 0.28 * inch
+    head_h = 0.24 * inch
+
+    grid_x = margin
+    grid_top = page_h - margin - title_h
+    grid_w = page_w - 2 * margin
+    grid_h = grid_top - margin - foot_h
+    col_w = grid_w / 7
+    body_top = grid_top - head_h
+    row_h = (grid_h - head_h) / len(weeks)
+
+    # --- Title ---
+    c.setFillColorRGB(*NAVY)
+    c.setFont("Helvetica-Bold", 20)
+    c.drawString(margin, page_h - margin - 14, "DocketPoint")
+    c.setFont("Helvetica", 14)
+    title = f"{calendar.month_name[month]} {year}"
+    c.drawRightString(page_w - margin, page_h - margin - 13, title)
+    if client_label:
+        c.setFillColorRGB(*GREY)
+        c.setFont("Helvetica", 9)
+        c.drawString(margin, page_h - margin - 30, client_label)
+
+    # --- Weekday header band ---
+    c.setFillColorRGB(*NAVY)
+    c.rect(grid_x, body_top, grid_w, head_h, fill=1, stroke=0)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("Helvetica-Bold", 9)
+    for i, wd in enumerate(_WEEKDAYS):
+        c.drawCentredString(grid_x + col_w * (i + 0.5), body_top + 7, wd)
+
+    # --- Day cells ---
+    for w, week in enumerate(weeks):
+        y_top = body_top - w * row_h
+        for i, day in enumerate(week):
+            x = grid_x + i * col_w
+            # cell border
+            c.setStrokeColorRGB(*RULE)
+            c.setLineWidth(0.5)
+            c.rect(x, y_top - row_h, col_w, row_h, fill=0, stroke=1)
+            if day == 0:
+                continue
+            evs = events.get(day, [])
+            # day number
+            c.setFont("Helvetica-Bold" if evs else "Helvetica", 9)
+            c.setFillColorRGB(*(NAVY if evs else GREY))
+            c.drawString(x + 4, y_top - 12, str(day))
+            # event pills
+            ey = y_top - 24
+            for r in evs:
+                if ey < y_top - row_h + 6:        # ran out of vertical room
+                    c.setFont("Helvetica-Oblique", 6.5)
+                    c.setFillColorRGB(*GREY)
+                    c.drawString(x + 4, y_top - row_h + 3, "+ more")
+                    break
+                pill_h = 19
+                c.setFillColorRGB(*LIGHT)
+                c.rect(x + 3, ey - pill_h + 11, col_w - 6, pill_h, fill=1, stroke=0)
+                c.setFillColorRGB(*NAVY)
+                c.rect(x + 3, ey - pill_h + 11, 2, pill_h, fill=1, stroke=0)
+                c.setFillColorRGB(0.1, 0.1, 0.1)
+                c.setFont("Helvetica-Bold", 6.5)
+                c.drawString(x + 7, ey + 3, _truncate(r["Docket Number"], col_w - 12, 6.5, bold=True))
+                c.setFont("Helvetica", 6.5)
+                c.drawString(x + 7, ey - 5,
+                             _truncate(r["Action"], col_w - 12, 6.5))
+                ey -= pill_h + 3
+
+    # --- Footer ---
+    c.setFillColorRGB(*GREY)
+    c.setFont("Helvetica", 7)
+    stamp = datetime.now().strftime("%m/%d/%Y")
+    c.drawString(margin, margin - 2,
+                 f"Generated {stamp} \u2022 deadlines extracted from case-structure slides; "
+                 f"verify against the system of record.")
+    c.drawRightString(page_w - margin, margin - 2,
+                      f"{sum(len(v) for v in events.values())} deadline(s) this month")
+
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _truncate(text, max_width_pt, font_size, bold=False):
+    """Trim a string with an ellipsis so it fits max_width_pt at font_size."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    font = "Helvetica-Bold" if bold else "Helvetica"
+    text = str(text)
+    if stringWidth(text, font, font_size) <= max_width_pt:
+        return text
+    while text and stringWidth(text + "\u2026", font, font_size) > max_width_pt:
+        text = text[:-1]
+    return text + "\u2026"
 
 
 def deadline_months(deadline_rows):
@@ -555,32 +633,85 @@ def month_grid_html(deadline_rows, year, month):
 
 
 # --- streamlit ui ---
-st.set_page_config(page_title="DocketPoint", page_icon="\U0001F4CA", layout="wide")
-st.title("\U0001F4CA DocketPoint")
+st.set_page_config(page_title="DocketPoint", page_icon="\U0001F4C5",
+                   layout="wide", initial_sidebar_state="expanded")
 
-st.sidebar.markdown("### About DocketPoint")
-st.sidebar.markdown(
-    "Extracts docket, application, PCT and WIPO numbers plus filing dates and "
-    "dated deadlines from patent *Case Structure* PowerPoint decks, and exports "
-    "them to Excel.\n\n"
-    "**Deadlines** sheet = one row per dated deadline (calendar-ready).\n\n"
-    "**All Cases** sheet = one row per case with every identifier."
-)
-st.sidebar.markdown("---")
+# --- Brand styling -------------------------------------------------------- #
+st.markdown("""
+<style>
+  :root { --dp-navy:#1F3864; --dp-accent:#2F5496; }
+  .block-container { padding-top: 2.2rem; max-width: 1200px; }
+  #dp-header { display:flex; align-items:center; gap:.7rem; margin-bottom:.15rem; }
+  #dp-header .mark {
+    width:34px; height:34px; border-radius:8px; background:var(--dp-navy);
+    display:flex; align-items:center; justify-content:center;
+  }
+  #dp-header .mark span { color:#fff; font-size:19px; font-weight:700; }
+  #dp-header h1 {
+    font-size:30px; font-weight:700; color:var(--dp-navy);
+    margin:0; letter-spacing:-.5px;
+  }
+  #dp-tagline { color:#5a6b85; font-size:14px; margin:0 0 1.1rem 2px; }
+  div[data-testid="stFileUploader"] section { border-radius:10px; }
+  .stTabs [data-baseweb="tab-list"] { gap: 4px; }
+  .stTabs [data-baseweb="tab"] { font-weight:600; }
+  div[data-testid="stMetricValue"] { color:var(--dp-navy); }
+  .stDownloadButton button {
+    background:var(--dp-navy); color:#fff; border:0; border-radius:8px;
+    font-weight:600; padding:.5rem 1rem;
+  }
+  .stDownloadButton button:hover { background:var(--dp-accent); color:#fff; }
+</style>
+""", unsafe_allow_html=True)
 
+st.markdown("""
+<div id="dp-header">
+  <div class="mark"><span>DP</span></div>
+  <h1>DocketPoint</h1>
+</div>
+<p id="dp-tagline">Patent docketing, extracted from your case-structure slides.</p>
+""", unsafe_allow_html=True)
+
+# --- Sidebar -------------------------------------------------------------- #
+with st.sidebar:
+    st.markdown("### About")
+    st.markdown(
+        "DocketPoint reads patent **case-structure** PowerPoint decks and pulls "
+        "out each case's docket, application, PCT and WIPO numbers, filing dates, "
+        "and dated deadlines."
+    )
+    st.markdown("### How to use")
+    st.markdown(
+        "1. Upload one or more `.pptx` decks.\n"
+        "2. Review the **Deadlines**, **All Cases**, and **Calendar** tabs.\n"
+        "3. Download the Excel workbook or a printable PDF calendar."
+    )
+    st.markdown("### Lookback")
+    st.markdown(
+        "By default the calendar and deadline list show only upcoming dates. "
+        "Use the slider to also include deadlines that fell due in recent months."
+    )
+    st.divider()
+    st.caption(
+        "Deadlines are extracted from slide text and are a convenience view only. "
+        "Always verify against the official docketing system of record."
+    )
+
+# --- Inputs --------------------------------------------------------------- #
 ppt_files = st.file_uploader(
-    "Upload one or more PowerPoint (.pptx) files",
+    "Upload case-structure PowerPoint files (.pptx)",
     type="pptx",
     accept_multiple_files=True,
 )
 
 months_back = st.slider(
-    "On the Deadlines view, include deadlines due this many months in the past:",
+    "Include deadlines due up to this many months in the past",
     0, 36, 0,
+    help="0 shows only deadlines from today onward.",
 )
 
 if not ppt_files:
-    st.info("Upload a .pptx case-structure deck to begin.")
+    st.info("Upload a case-structure deck (.pptx) to begin.")
     st.stop()
 
 cutoff = date.today() - timedelta(days=int(30.4 * months_back))
@@ -590,18 +721,14 @@ for f in ppt_files:
     client = f.name.replace(".pptx", "")
     cases = extract_cases(f)
     if not cases:
-        st.warning(f"\u26A0\uFE0F No extractable cases found in {f.name}.")
+        st.warning(f"No extractable cases found in {f.name}.")
         continue
-    for c in cases:
-        c["_client"] = client
     all_cases.append((client, cases))
 
 if not all_cases:
     st.stop()
 
-# Build combined tables across all uploaded files.
-# The cutoff is applied here at the source, so the on-screen Deadlines table and
-# the downloaded Excel always agree with where the slider sits.
+# Apply the cutoff at the source so the tables, calendar, and downloads all agree.
 deadline_rows, case_rows = [], []
 for client, cases in all_cases:
     d_rows, c_rows = cases_to_rows(cases, client, deadline_cutoff=cutoff)
@@ -611,13 +738,20 @@ for client, cases in all_cases:
 deadlines_df = pd.DataFrame(deadline_rows)
 cases_df = pd.DataFrame(case_rows)
 
-st.success(
-    f"\u2705 Extracted {len(cases_df)} cases and "
-    f"{len(deadlines_df)} deadlines from {len(all_cases)} file(s)."
-)
+combined = []
+for _, cases in all_cases:
+    combined.extend(cases)
+client_label = all_cases[0][0] if len(all_cases) == 1 else "Combined"
 
-tab1, tab2, tab3 = st.tabs([f"\U0001F5D3\uFE0F Deadlines ({len(deadlines_df)})",
-                            f"\U0001F4C1 All Cases ({len(cases_df)})",
+# --- Summary metrics ------------------------------------------------------ #
+m1, m2, m3 = st.columns(3)
+m1.metric("Files", len(all_cases))
+m2.metric("Cases", len(cases_df))
+m3.metric("Deadlines in range", len(deadlines_df))
+
+# --- Tabs ----------------------------------------------------------------- #
+tab1, tab2, tab3 = st.tabs([f"\U0001F4CB Deadlines ({len(deadlines_df)})",
+                            f"\U0001F5C2\uFE0F All Cases ({len(cases_df)})",
                             "\U0001F4C5 Calendar"])
 with tab1:
     st.dataframe(deadlines_df, use_container_width=True, hide_index=True)
@@ -626,39 +760,34 @@ with tab2:
 with tab3:
     months = deadline_months(deadline_rows)
     if not months:
-        st.info("No deadlines in range to display. Adjust the slider above.")
+        st.info("No deadlines in range to display. Adjust the lookback slider above.")
     else:
-        choice = st.selectbox("Month", options=months, format_func=month_label)
+        left, right = st.columns([3, 1])
+        with left:
+            choice = st.selectbox("Month", options=months, format_func=month_label)
+        with right:
+            st.write("")
+            st.write("")
+            pdf_bytes = month_pdf(deadline_rows, choice[0], choice[1],
+                                  client_label=client_label)
+            st.download_button(
+                "\U0001F4C4 Download PDF",
+                pdf_bytes,
+                file_name=f"{client_label}_{choice[0]}-{choice[1]:02d}_calendar.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
         st.markdown(month_grid_html(deadline_rows, choice[0], choice[1]),
                     unsafe_allow_html=True)
 
-# Build a single workbook covering all uploaded files
-combined = []
-for _, cases in all_cases:
-    combined.extend(cases)
-client_label = all_cases[0][0] if len(all_cases) == 1 else "Combined"
-
+# --- Excel download ------------------------------------------------------- #
+st.divider()
 buf = BytesIO()
 build_workbook(combined, client_label, deadline_cutoff=cutoff).save(buf)
 buf.seek(0)
-
-col1, col2 = st.columns(2)
-with col1:
-    st.download_button(
-        "\U0001F4E5 Download Excel",
-        buf,
-        file_name=f"{client_label}_Docket_Extract.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-with col2:
-    reminder_days = st.number_input(
-        "Calendar reminder (days before, 0 = none)",
-        min_value=0, max_value=60, value=14, step=1,
-    )
-    ics_text = make_ics(deadline_rows, reminder_days=int(reminder_days))
-    st.download_button(
-        "\U0001F4C5 Download Calendar (.ics)",
-        ics_text,
-        file_name=f"{client_label}_Deadlines.ics",
-        mime="text/calendar",
-    )
+st.download_button(
+    "\U0001F4E5 Download Excel workbook",
+    buf,
+    file_name=f"{client_label}_Docket_Extract.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
