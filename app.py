@@ -1,5 +1,6 @@
 import re
 from io import BytesIO
+from collections import Counter
 from datetime import date, datetime, timedelta
 import calendar
 
@@ -13,13 +14,151 @@ from openpyxl.utils import get_column_letter
 
 
 # --- extraction engine ---
+# =========================================================================== #
+#  LAYOUT DETECTION
+#  --------------------------------------------------------------------------
+#  Different law firms / clients use different docket conventions, e.g.
+#      Antiva        01394-0005-00EP        signature  #-#-#@
+#      Eradivir      2018-LOW-68327-04      signature  #-@-#-#
+#      NewAmsterdam  P6046729US1            signature  @#@#
+#  but each deck is internally consistent. Rather than hard-coding every
+#  client's format, we LEARN this deck's docket pattern in a first pass:
+#  abstract each box's leading token into a structural signature (digit-run ->
+#  '#', letter-run -> '@', separators kept), tally them, and the dominant
+#  docket-shaped signature(s) ARE this deck's docket pattern.
+#
+#  Only the docket varies between clients. Application / PCT / WIPO numbers are
+#  keyed to jurisdiction (a US serial is ##/###,### everywhere), so those
+#  patterns -- defined later in this file -- need no per-deck detection.
+# =========================================================================== #
+
+_DATE_TOKEN_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$")
+_STATUS_WORDS = {"ISSUED", "GRANTED", "ALLOWED", "ABANDONED", "WITHDRAWN",
+                 "PENDING", "PRIORITY", "ACTIVE", "CASES", "STRUCTURE",
+                 "STRUCTURES", "APPENDIX", "KEY", "PRIORITIES"}
+
+
+def _signature(token):
+    """Abstract a token: digit-run -> '#', letter-run -> '@', separators kept."""
+    return re.sub(r"[A-Za-z]+", "@", re.sub(r"\d+", "#", token))
+
+
+def _first_token(box_text):
+    lines = box_text.splitlines()
+    if not lines:
+        return ""
+    parts = lines[0].strip().split()
+    return parts[0] if parts else ""
+
+
+def _is_docket_ish(tok):
+    """Could this leading token plausibly be a docket (not a date/app#/word)?"""
+    if not tok or len(tok) < 6:
+        return False
+    if _DATE_TOKEN_RE.match(tok):
+        return False
+    u = tok.upper()
+    if u.startswith(("PCT/", "WO")):
+        return False
+    if u.strip(",/.") in _STATUS_WORDS:
+        return False
+    if not re.search(r"\d", tok):                 # a docket always has a digit
+        return False
+    # reject a bare US-style application serial, e.g. 17/263,451
+    if re.fullmatch(r"\d{1,3}/\d{2,3},?\d{0,3}", tok):
+        return False
+    return True
+
+
+def _sig_is_docket_shaped(sig):
+    """A docket signature mixes letters+digits, or is a multi-group number."""
+    has_at = "@" in sig
+    has_hash = "#" in sig
+    groups = len(re.split(r"[-/._]", sig))
+    if has_at and has_hash and len(sig) >= 3:
+        return True
+    if has_hash and groups >= 3 and len(sig) >= 5:
+        return True
+    return False
+
+
+def _sig_to_regex(sig):
+    """Concrete regex for a signature: '#' -> \\d+, '@' -> [A-Za-z]+, sep literal."""
+    out = []
+    for ch in sig:
+        if ch == "#":
+            out.append(r"\d+")
+        elif ch == "@":
+            out.append(r"[A-Za-z]+")
+        else:
+            out.append(re.escape(ch))
+    return "".join(out)
+
+
+def detect_docket_regex(box_texts):
+    """
+    Learn this deck's docket pattern from its leading tokens.
+
+    Returns (compiled_regex, signature_list). The regex matches a docket at the
+    START of a token. Returns (None, []) when no docket-shaped signature recurs,
+    in which case the caller falls back to the built-in patterns.
+    """
+    cands = [_first_token(b) for b in box_texts]
+    cands = [c for c in cands if _is_docket_ish(c)]
+    if not cands:
+        return None, []
+
+    sigs = Counter(_signature(c) for c in cands)
+    threshold = max(3, int(0.04 * len(box_texts)))
+    keep = [s for s, n in sigs.items()
+            if n >= threshold and _sig_is_docket_shaped(s)]
+    if not keep:
+        # nothing cleared the bar; take the most common docket-shaped signature
+        keep = [s for s, _ in sigs.most_common() if _sig_is_docket_shaped(s)][:1]
+    if not keep:
+        return None, []
+
+    # Longest signatures first so a fuller docket wins over a prefix of itself
+    # (e.g. P6046729PCT-CN before P6046729EP's @#@).
+    keep.sort(key=len, reverse=True)
+    pattern = "|".join(_sig_to_regex(s) for s in keep)
+    return re.compile(r"^(?:%s)" % pattern), keep
+
+
+def detect_matter_regex(docket_signatures):
+    """
+    Derive a 'matter family' prefix regex from the learned docket signatures,
+    used to group related cases (all national filings off one matter).
+
+    The matter is the docket minus its trailing case suffix. We strip a trailing
+    country+sequence (e.g. 'US1', '-00EP', '-04', 'PCT-CN') heuristically.
+    Returns a compiled regex whose group(1) is the matter stem, or None.
+    """
+    if not docket_signatures:
+        return None
+    # Build from the longest signature: keep everything up to the last
+    # letter/sep transition that looks like a case suffix.
+    # Practical approach: matter = docket with a trailing
+    #   (separator? + letters + digits?)  OR  (separator + digits)  removed.
+    return re.compile(
+        r"^(.*?)(?:[-/]?[A-Za-z]{2,}[-/]?[A-Za-z0-9]*\d*|[-/]\d{1,3})$"
+    )
+
+
 # --------------------------------------------------------------------------- #
 #  Docket / client-code patterns
 # --------------------------------------------------------------------------- #
 
-# 01394-0005-00EP   or   01394-0003-00MO-01CN
+# Two docket conventions are supported:
+#   Antiva-style:   01394-0005-00EP   /  01394-0003-00MO-01CN
+#                   (5 digits - 4 digits - 2 digits + country, optional 2nd leg)
+#   Eradivir-style: 2018-LOW-68327-04
+#                   (4-digit year - 3-letter client mnemonic - 4-6 digit matter
+#                    - 2-digit case suffix; country is NOT in the docket here,
+#                    it follows the application number on the same/next line)
 DOCKET_RE = re.compile(
-    r"\b\d{5}-\d{4}-\d{2}[A-Z]{2,4}(?:-\d{2}[A-Z]{2,4})?\b"
+    r"\b\d{5}-\d{4}-\d{2}[A-Z]{2,4}(?:-\d{2}[A-Z]{2,4})?\b"     # Antiva
+    r"|\b\d{4}-[A-Z]{2,4}-\d{4,6}-\d{2}\b"                      # Eradivir
 )
 
 # Client code tokens that we want to ignore when hunting for an app number:
@@ -69,7 +208,7 @@ FALLBACK_ORDER = [
     "CN", "HK", "EP", "JP", "IN", "AU", "TW", "CA", "IL", "NZ",
 ]
 
-PCT_RE = re.compile(r"\bPCT/[A-Z]{2}\d{4}/\d{6}\b")
+PCT_RE = re.compile(r"\bPCT/[A-Z]{2}\d{4}/\d{5,6}\b")
 # WO2014/143643 ; WO2024020127 (no slash) ; WO 2025/160227 A1
 WIPO_RE = re.compile(r"\bWO\s?\d{4}/?\d{6}(?:\s?A\d)?\b")
 
@@ -90,16 +229,69 @@ SKIP_EXACT = {"structure", "case structures", "key", "priorities",
 # --------------------------------------------------------------------------- #
 #  Helpers
 # --------------------------------------------------------------------------- #
-def get_country(docket):
-    """EP from 01394-0005-00EP ; CN from 01394-0003-02CN ; MO special-cased."""
+def _country_from_docket_suffix(docket):
+    """Antiva style: EP from 01394-0005-00EP ; MO special-cased."""
     if not docket:
         return None
-    last = docket.split("-")[-1]
-    m = re.match(r"\d*([A-Z]{2,4})$", last)
-    country = m.group(1) if m else None
-    # 01394-0003-00MO-01CN -> Macau application even though last segment is CN
     if "MO" in docket:
         return "MO"
+    last = docket.split("-")[-1]
+    m = re.match(r"\d*([A-Z]{2,4})$", last)
+    return m.group(1) if m else None
+
+
+# Known jurisdiction codes that appear as a trailing 2-letter code after the
+# application number (Eradivir style: "17/263,451  US", "3107778  CA").
+KNOWN_COUNTRIES = {
+    "US", "EP", "EU", "JP", "KR", "CN", "IN", "AU", "TW", "CL", "EA", "CA",
+    "IL", "NZ", "SG", "ZA", "MX", "CO", "AR", "HK", "BR", "MO", "MY", "PH",
+    "TH", "VN", "ID", "GB", "DE", "FR", "PE", "EC", "CR", "GT",
+    # Additional jurisdictions seen across client decks:
+    "RU", "UA", "DZ", "EG", "LY", "TN", "PA", "AP", "VE", "NL", "AT", "SA",
+    "AE", "KW", "UY", "LB", "OA", "GC", "QA", "BH", "JO", "MA", "NG", "PK",
+    "BD", "LK", "KZ", "AZ", "GE", "RS", "UA",
+}
+
+
+def _country_from_app_line(text):
+    """
+    The 2-letter jurisdiction follows the application number, e.g. a line
+    ending in '...  US' or '... CN'. It may carry a trailing continuation /
+    status tag that we ignore:
+        '19/257,226  USC4'   -> US   (continuation 4)
+        '63/891,043  US P2'  -> US   (provisional 2)
+        '62025115409.7 HK-CN'-> HK   (HK based on a CN parent)
+        '...  EP D1'         -> EP   (divisional 1)
+    Returns the first jurisdiction code found.
+    """
+    for line in text.splitlines():
+        line = line.rstrip()
+        # <app-number char> <space> <CC> [optional tag: space/hyphen + letters/digits]
+        m = re.search(
+            r"[\dA-Za-z,./)\-]\s+([A-Z]{2})(?:[\s\-]?[A-Z]{0,2}\d{0,2}|\d{1,2})?\s*$",
+            line,
+        )
+        if m and m.group(1) in KNOWN_COUNTRIES:
+            return m.group(1)
+    return None
+
+
+def get_country(docket, text=""):
+    """
+    Resolve the jurisdiction.
+
+    Priority:
+      1) Trailing 2-letter code after the application number (Eradivir/NewAms).
+      2) Trailing letters of the docket suffix (Antiva decks).
+      3) A bare US-style serial (##/###,### or 6x/...) with no country code:
+         infer US, since that format is unambiguously a US application.
+    Normalizes EU -> EP since both denote a European application here.
+    """
+    country = _country_from_app_line(text) or _country_from_docket_suffix(docket)
+    if country is None and re.search(r"\b\d{2}/\d{3},\d{3}\b", text):
+        country = "US"
+    if country == "EU":
+        country = "EP"
     return country
 
 
@@ -123,27 +315,88 @@ def _clean_match(value):
 def find_application_number(text, docket):
     """Return (application_number, country)."""
     search_text = _strip_known_tokens(text, docket)
-    country = get_country(docket)
+    country = get_country(docket, text)
 
     # PCT national-phase parent: the PCT number is the identifier, not a
     # separate application serial. Reported in the PCT column instead.
     if country == "PCT":
         return None, country
 
+    # A box whose only identifier is a PCT number (no national jurisdiction
+    # code present) is a PCT filing -- don't coin a serial from the PCT digits.
+    if country is None and PCT_RE.search(text):
+        return None, "PCT"
+
     # 1) Use the jurisdiction's own pattern. For a known country we trust only
     #    that pattern -- guessing with another country's (looser) pattern tends
     #    to grab grant numbers, so we'd rather leave the field blank.
     if country in COUNTRY_APP_RES:
         m = COUNTRY_APP_RES[country].search(search_text)
-        return (_clean_match(m.group(0)) if m else None), country
-
-    # 2) Unknown jurisdiction -> try every pattern in priority order.
-    for key in FALLBACK_ORDER:
-        m = COUNTRY_APP_RES[key].search(search_text)
         if m:
             return _clean_match(m.group(0)), country
+        # Known country but its pattern missed (e.g. a typo'd serial in the
+        # source slide). Fall through to the last-resort capture below rather
+        # than dropping the number entirely.
 
-    return None, country
+    # 2) Unknown jurisdiction -> try every pattern in priority order.
+    if country not in COUNTRY_APP_RES:
+        for key in FALLBACK_ORDER:
+            m = COUNTRY_APP_RES[key].search(search_text)
+            if m:
+                return _clean_match(m.group(0)), country
+
+    # 3) Country-anchored generic capture: take the token sitting right before a
+    #    trailing 2-letter country code. Handles jurisdictions we have no
+    #    explicit pattern for (DZ, AP, TH, VN, UY, ...).
+    anchored = _appno_before_country(text, docket)
+    if anchored:
+        return anchored, country
+
+    # 4) Last resort: capture the most number-like token on the line directly
+    #    after the docket, so a malformed entry is surfaced (flagged for review)
+    #    instead of silently disappearing.
+    raw = _last_resort_appno(text, docket)
+    return raw, country
+
+
+def _appno_before_country(text, docket):
+    """
+    Generic capture: the application number is the token immediately before a
+    trailing 2-letter country code, on any line. Works for jurisdictions we
+    don't have an explicit pattern for ('P6046729PCT-DZ 10734 DZ' -> 10734,
+    'I651086B  TW' -> I651086B).
+    """
+    for line in text.splitlines():
+        line = line.rstrip()
+        m = re.search(r"([A-Za-z]{0,2}\d[\dA-Za-z,./\-]*)\s+([A-Z]{2})\s*$", line)
+        if m and m.group(2) in KNOWN_COUNTRIES:
+            token = m.group(1)
+            if docket and token in docket:
+                continue
+            if re.fullmatch(r"(?:19|20)\d{2}", token):   # a real year, not an app #
+                continue
+            return _clean_match(token)
+    return None
+
+
+def _last_resort_appno(text, docket):
+    """Grab a plausible application-number token when no pattern matched."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    # Find the docket line, then look at it and the following line.
+    candidates = []
+    for i, ln in enumerate(lines):
+        if docket and docket in ln:
+            tail = ln.replace(docket, " ")
+            candidates.append(tail)
+            if i + 1 < len(lines):
+                candidates.append(lines[i + 1])
+            break
+    for cand in candidates:
+        # a token with at least 5 digits and a slash/comma/dot, e.g. 674/460,651
+        m = re.search(r"\b[\dA-Z]{0,3}[\d][\d,./\-]{4,}\d\b", cand)
+        if m:
+            return _clean_match(m.group(0))
+    return None
 
 
 def find_pct(text):
@@ -223,8 +476,14 @@ def find_dates(lines):
 # --------------------------------------------------------------------------- #
 #  Box-level parsing
 # --------------------------------------------------------------------------- #
-def parse_box(text, slide_num):
-    """Return a case dict for one text box, or None if it holds no case data."""
+def parse_box(text, slide_num, docket_re=None):
+    """
+    Return a case dict for one text box, or None if it holds no case data.
+
+    docket_re: the per-deck docket pattern learned by detect_docket_regex().
+    When it doesn't match (or isn't supplied), fall back to the built-in
+    DOCKET_RE so previously-supported decks keep working.
+    """
     raw = text.strip()
     if raw.lower() in SKIP_EXACT:
         return None
@@ -233,8 +492,18 @@ def parse_box(text, slide_num):
     if not lines:
         return None
 
-    docket_m = DOCKET_RE.search(raw)
-    docket = docket_m.group(0) if docket_m else None
+    docket = None
+    # 1) Learned pattern, anchored to the box's first token.
+    if docket_re is not None:
+        ft = _first_token(raw)
+        m = docket_re.match(ft)
+        if m:
+            docket = m.group(0)
+    # 2) Fallback: the built-in multi-format pattern, searched anywhere.
+    if docket is None:
+        m = DOCKET_RE.search(raw)
+        if m:
+            docket = m.group(0)
 
     pct = find_pct(raw)
     wipo = find_wipo(raw)
@@ -246,6 +515,13 @@ def parse_box(text, slide_num):
     app_no, country = (None, None)
     if docket:
         app_no, country = find_application_number(raw, docket)
+        # Single-identifier box like "I338684B  TW": the detector treated the
+        # number as a docket, but it's really the application/grant number with
+        # no separate docket. Re-assign so the number isn't lost.
+        if app_no is None and country and len(lines) <= 2:
+            m = re.match(r"^(\S+)\s+([A-Z]{2})\s*$", lines[0])
+            if m and m.group(1) == docket and m.group(2) in KNOWN_COUNTRIES:
+                app_no, docket = docket, None
     elif pct:
         country = "PCT"
 
@@ -284,13 +560,23 @@ def iter_box_texts(shape):
 def extract_cases(pptx_source):
     """Parse a pptx (path or file-like) -> list of case dicts."""
     prs = Presentation(pptx_source)
-    cases = []
+
+    # First pass: collect every text box so we can learn this deck's docket
+    # format before extracting anything.
+    box_index = []   # (slide_num, text)
     for slide_num, slide in enumerate(prs.slides, start=1):
         for shape in slide.shapes:
             for text in iter_box_texts(shape):
-                case = parse_box(text, slide_num)
-                if case:
-                    cases.append(case)
+                box_index.append((slide_num, text))
+
+    docket_re, _sigs = detect_docket_regex([t for _, t in box_index])
+
+    # Second pass: parse each box using the learned pattern.
+    cases = []
+    for slide_num, text in box_index:
+        case = parse_box(text, slide_num, docket_re=docket_re)
+        if case:
+            cases.append(case)
     return cases
 
 
@@ -320,7 +606,18 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
     case_rows, deadline_rows, seen = [], [], set()
 
     for c in cases:
+        # Flag rows a human should eyeball: an identifier was captured but the
+        # jurisdiction couldn't be resolved (often a typo in the source slide),
+        # or a docket has no application/PCT/WIPO number at all.
+        review = ""
+        if c["docket"] and c["application_number"] and not c["country"]:
+            review = "Check: country not resolved"
+        elif c["docket"] and not c["application_number"] \
+                and not c["pct_number"] and not c["wipo_number"]:
+            review = "Check: no application number"
+
         case_rows.append({
+            "Review": review,
             "Client": client,
             "Slide": c["slide"],
             "Docket Number": c["docket"],
@@ -401,7 +698,7 @@ def build_workbook(cases, client, deadline_cutoff=None):
 
     ws2 = wb.create_sheet("All Cases")
     _write_sheet(ws2, case_rows,
-                 ["Client", "Slide", "Docket Number", "Country",
+                 ["Review", "Client", "Slide", "Docket Number", "Country",
                   "Application Number", "PCT Number", "WIPO Number",
                   "Filing Date", "Status", "Due Dates / Actions"])
 
