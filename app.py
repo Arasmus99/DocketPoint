@@ -19,8 +19,8 @@ from openpyxl.utils import get_column_letter
 #  --------------------------------------------------------------------------
 #  Different law firms / clients use different docket conventions, e.g.
 #      Client1        01394-0005-00EP        signature  #-#-#@
-#      Client2      2018-LOW-68327-04      signature  #-@-#-#
-#      Client3  P6046729US1            signature  @#@#
+#      Client2       2018-LOW-68327-04      signature  #-@-#-#
+#      Client3          P6046729US1            signature  @#@#
 #  but each deck is internally consistent. Rather than hard-coding every
 #  client's format, we LEARN this deck's docket pattern in a first pass:
 #  abstract each box's leading token into a structural signature (digit-run ->
@@ -741,13 +741,15 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     """
     Render a single month as a printable, landscape PDF calendar.
 
-    The calendar grid keeps its existing dimensions. Each day shows the
-    first three deadlines in-cell; any additional deadlines are listed in
-    a right-hand overflow margin, with a "+ more*" marker in the day cell.
+    The page remains standard US Letter landscape.  The calendar grid is
+    narrowed horizontally to reserve a dedicated right-hand margin for
+    overflow deadlines.  The first three deadlines remain in each day cell;
+    additional deadlines are marked with "+ more*" and listed in the margin.
     """
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.pdfgen import canvas as _canvas
     from reportlab.lib.units import inch
+    from reportlab.pdfbase.pdfmetrics import stringWidth
 
     # Bucket this month's deadlines by day-of-month.
     events = {}
@@ -762,19 +764,23 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     page_w, page_h = landscape(letter)            # 792 x 612
     c = _canvas.Canvas(buf, pagesize=(page_w, page_h))
 
+    # Keep the page printable on standard Letter paper while reserving a
+    # substantial, readable right-hand overflow column.
     margin = 0.4 * inch
     title_h = 0.55 * inch
     foot_h = 0.28 * inch
     head_h = 0.24 * inch
+    overflow_w = 1.65 * inch
+    overflow_gap = 0.12 * inch
 
-    # Keep the existing calendar dimensions exactly as before.
     grid_x = margin
     grid_top = page_h - margin - title_h
-    grid_w = page_w - 2 * margin
+    grid_w = page_w - 2 * margin - overflow_w - overflow_gap
     grid_h = grid_top - margin - foot_h
     col_w = grid_w / 7
     body_top = grid_top - head_h
     row_h = (grid_h - head_h) / len(weeks)
+    overflow_x = grid_x + grid_w + overflow_gap
 
     # --- Title ---
     c.setFillColorRGB(*NAVY)
@@ -782,7 +788,7 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     c.drawString(margin, page_h - margin - 14, "DocketPoint")
     c.setFont("Helvetica", 14)
     title = f"{calendar.month_name[month]} {year}"
-    c.drawRightString(page_w - margin, page_h - margin - 13, title)
+    c.drawRightString(grid_x + grid_w, page_h - margin - 13, title)
     if client_label:
         c.setFillColorRGB(*GREY)
         c.setFont("Helvetica", 9)
@@ -796,7 +802,7 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     for i, wd in enumerate(_WEEKDAYS):
         c.drawCentredString(grid_x + col_w * (i + 0.5), body_top + 7, wd)
 
-    # Collect overflow while rendering the existing calendar cells.
+    # Collect overflow while rendering the calendar cells.
     overflow = []
     max_in_cell = 3
 
@@ -843,8 +849,8 @@ def month_pdf(deadline_rows, year, month, client_label=""):
                 ey -= pill_h + 3
 
             if extra_evs:
-                # Preserve the familiar indicator, but add an asterisk so the
-                # reader knows the omitted actions are listed in the margin.
+                # The asterisk tells the reader that the omitted actions are
+                # listed in the dedicated right-hand margin.
                 c.setFont("Helvetica-Oblique", 6.5)
                 c.setFillColorRGB(*GREY)
                 c.drawString(x + 4, y_top - row_h + 3, "+ more*")
@@ -852,50 +858,97 @@ def month_pdf(deadline_rows, year, month, client_label=""):
                     overflow.append((day, r))
 
     # --- Right-hand overflow margin ---
-    # Preserve the calendar grid's existing dimensions. The page's existing
-    # right margin is narrow, so use it as a compact overflow index: each
-    # omitted action is referenced by date and docket, with the full action
-    # text continuing in a wrapped line where space permits.
     if overflow:
-        overflow_x = grid_x + grid_w + 3
-        overflow_w = page_w - margin - overflow_x
+        # Separator between calendar and overflow column.
+        c.setStrokeColorRGB(*RULE)
+        c.setLineWidth(0.6)
+        c.line(overflow_x - overflow_gap / 2, body_top,
+               overflow_x - overflow_gap / 2, body_top - row_h * len(weeks))
 
-        c.saveState()
-        c.translate(page_w - margin - 2, grid_top - 2)
-        c.rotate(90)
         c.setFillColorRGB(*NAVY)
-        c.setFont("Helvetica-Bold", 7)
-        c.drawString(0, 0, "* ADDITIONAL ACTIONS IN MARGIN")
-        c.restoreState()
+        c.setFont("Helvetica-Bold", 8)
+        c.drawString(overflow_x, body_top - 9, "ADDITIONAL ACTIONS*")
 
-        # Since the physical margin is only 0.4", place a numbered overflow
-        # key along the right edge, using the same date marker shown in-cell.
-        oy = grid_top - 12
-        c.setFillColorRGB(*NAVY)
-        c.setFont("Helvetica-Bold", 6.5)
-        c.drawRightString(page_w - 2, oy, "*")
-        oy -= 9
+        oy = body_top - 22
+        available_w = overflow_w
+        min_y = margin + foot_h + 5
+
+        def _draw_wrapped(text, x, y, width, font, size, max_lines=3,
+                          leading=None, color=GREY):
+            """Draw up to max_lines of width-constrained text; return new y."""
+            if leading is None:
+                leading = size + 1.5
+            words = str(text or "").split()
+            lines = []
+            current = ""
+            for word in words:
+                trial = word if not current else current + " " + word
+                if stringWidth(trial, font, size) <= width:
+                    current = trial
+                else:
+                    if current:
+                        lines.append(current)
+                    current = word
+                    if len(lines) >= max_lines:
+                        break
+            if current and len(lines) < max_lines:
+                lines.append(current)
+            if len(lines) == max_lines and words:
+                # Add an ellipsis when text was truncated.
+                joined = " ".join(lines)
+                if len(joined) < len(str(text)):
+                    last = lines[-1]
+                    while last and stringWidth(last + "…", font, size) > width:
+                        last = last[:-1]
+                    lines[-1] = last + "…"
+            c.setFillColorRGB(*color)
+            c.setFont(font, size)
+            for line in lines:
+                if y < min_y:
+                    break
+                c.drawString(x, y, line)
+                y -= leading
+            return y
 
         for day, r in overflow:
-            if oy < margin + foot_h + 8:
+            # Leave enough room for the complete entry; if necessary, the
+            # final entry is omitted rather than printed on top of the footer.
+            if oy < min_y + 18:
                 break
-            c.setFillColorRGB(*GREY)
-            c.setFont("Helvetica-Bold", 5.5)
-            c.drawRightString(page_w - 2, oy, f"{day}")
-            oy -= 6
 
-            c.setFillColorRGB(*GREY)
-            c.setFont("Helvetica", 4.5)
-            docket = _truncate(str(r.get("Docket Number", "")), 24, 4.5)
-            c.drawRightString(page_w - 2, oy, docket)
-            oy -= 7
+            # Date heading
+            c.setFillColorRGB(*NAVY)
+            c.setFont("Helvetica-Bold", 7)
+            oy = _draw_wrapped(str(day), overflow_x, oy, available_w,
+                               "Helvetica-Bold", 7, max_lines=1,
+                               leading=8, color=NAVY)
+
+            # Client + docket
+            client = str(r.get("Client", "")).strip()
+            docket = str(r.get("Docket Number", "")).strip()
+            ref = f"{client} — {docket}" if client else docket
+            oy = _draw_wrapped(ref, overflow_x, oy - 1, available_w,
+                               "Helvetica-Bold", 6.2, max_lines=2,
+                               leading=7.2, color=GREY)
+
+            # Action text
+            oy = _draw_wrapped(r.get("Action", ""), overflow_x, oy - 1,
+                               available_w, "Helvetica", 6.2, max_lines=3,
+                               leading=7.2, color=GREY)
+            oy -= 5
+
+        # Legend line so the asterisk has an explicit meaning.
+        c.setFillColorRGB(*GREY)
+        c.setFont("Helvetica-Oblique", 5.8)
+        c.drawString(overflow_x, margin + foot_h + 1,
+                     "* More actions than fit in the day cell")
 
     # --- Footer ---
     c.setFillColorRGB(*GREY)
     c.setFont("Helvetica", 7)
     stamp = datetime.now().strftime("%m/%d/%Y")
     c.drawString(margin, margin - 2,
-                 f"Generated {stamp} \u2022 deadlines extracted from case-structure slides; "
+                 f"Generated {stamp} • deadlines extracted from case-structure slides; "
                  f"verify against the system of record.")
     c.drawRightString(page_w - margin, margin - 2,
                       f"{sum(len(v) for v in events.values())} deadline(s) this month")
