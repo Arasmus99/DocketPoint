@@ -687,9 +687,19 @@ def _write_sheet(ws, rows, columns, date_cols=()):
 
 
 def build_workbook(cases, client, deadline_cutoff=None):
+    """Build a workbook from cases belonging to a single client."""
     deadline_rows, case_rows = cases_to_rows(cases, client, deadline_cutoff)
+    return build_workbook_from_rows(deadline_rows, case_rows)
 
+
+def build_workbook_from_rows(deadline_rows, case_rows):
+    """Build a workbook from already-provenanced rows.
+
+    This avoids losing the client associated with each PowerPoint when
+    multiple files are combined for export.
+    """
     wb = Workbook()
+
     ws1 = wb.active
     ws1.title = "Deadlines"
     _write_sheet(ws1, deadline_rows,
@@ -1045,9 +1055,9 @@ for client, cases in all_cases:
 deadlines_df = pd.DataFrame(deadline_rows)
 cases_df = pd.DataFrame(case_rows)
 
-combined = []
-for _, cases in all_cases:
-    combined.extend(cases)
+# Keep a display label for the export filename, but do not use it as the
+# row-level Client value. The row-level values were already populated from
+# each PowerPoint filename above.
 client_label = all_cases[0][0] if len(all_cases) == 1 else "Combined"
 
 # --- Summary metrics ------------------------------------------------------ #
@@ -1090,7 +1100,8 @@ with tab3:
 # --- Excel download ------------------------------------------------------- #
 st.divider()
 buf = BytesIO()
-build_workbook(combined, client_label, deadline_cutoff=cutoff).save(buf)
+# Export the rows already built with their correct per-file client provenance.
+build_workbook_from_rows(deadline_rows, case_rows).save(buf)
 buf.seek(0)
 st.download_button(
     "\U0001F4E5 Download Excel workbook",
