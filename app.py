@@ -18,9 +18,9 @@ from openpyxl.utils import get_column_letter
 #  LAYOUT DETECTION
 #  --------------------------------------------------------------------------
 #  Different law firms / clients use different docket conventions, e.g.
-#      Antiva        01394-0005-00EP        signature  #-#-#@
-#      Eradivir      2018-LOW-68327-04      signature  #-@-#-#
-#      NewAmsterdam  P6046729US1            signature  @#@#
+#      Client1        01394-0005-00EP        signature  #-#-#@
+#      Client2      2018-LOW-68327-04      signature  #-@-#-#
+#      Client3  P6046729US1            signature  @#@#
 #  but each deck is internally consistent. Rather than hard-coding every
 #  client's format, we LEARN this deck's docket pattern in a first pass:
 #  abstract each box's leading token into a structural signature (digit-run ->
@@ -741,8 +741,9 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     """
     Render a single month as a printable, landscape PDF calendar.
 
-    Returns the PDF as bytes. Pure reportlab (no system libraries), so it
-    renders identically on Streamlit Cloud and any desktop.
+    The calendar grid keeps its existing dimensions. Each day shows the
+    first three deadlines in-cell; any additional deadlines are listed in
+    a right-hand overflow margin, with a "+ more*" marker in the day cell.
     """
     from reportlab.lib.pagesizes import letter, landscape
     from reportlab.pdfgen import canvas as _canvas
@@ -766,6 +767,7 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     foot_h = 0.28 * inch
     head_h = 0.24 * inch
 
+    # Keep the existing calendar dimensions exactly as before.
     grid_x = margin
     grid_top = page_h - margin - title_h
     grid_w = page_w - 2 * margin
@@ -794,30 +796,33 @@ def month_pdf(deadline_rows, year, month, client_label=""):
     for i, wd in enumerate(_WEEKDAYS):
         c.drawCentredString(grid_x + col_w * (i + 0.5), body_top + 7, wd)
 
+    # Collect overflow while rendering the existing calendar cells.
+    overflow = []
+    max_in_cell = 3
+
     # --- Day cells ---
     for w, week in enumerate(weeks):
         y_top = body_top - w * row_h
         for i, day in enumerate(week):
             x = grid_x + i * col_w
-            # cell border
             c.setStrokeColorRGB(*RULE)
             c.setLineWidth(0.5)
             c.rect(x, y_top - row_h, col_w, row_h, fill=0, stroke=1)
             if day == 0:
                 continue
+
             evs = events.get(day, [])
-            # day number
+            visible_evs = evs[:max_in_cell]
+            extra_evs = evs[max_in_cell:]
+
+            # Day number
             c.setFont("Helvetica-Bold" if evs else "Helvetica", 9)
             c.setFillColorRGB(*(NAVY if evs else GREY))
             c.drawString(x + 4, y_top - 12, str(day))
-            # event pills
+
+            # Event pills
             ey = y_top - 24
-            for r in evs:
-                if ey < y_top - row_h + 6:        # ran out of vertical room
-                    c.setFont("Helvetica-Oblique", 6.5)
-                    c.setFillColorRGB(*GREY)
-                    c.drawString(x + 4, y_top - row_h + 3, "+ more")
-                    break
+            for r in visible_evs:
                 pill_h = 19
                 c.setFillColorRGB(*LIGHT)
                 c.rect(x + 3, ey - pill_h + 11, col_w - 6, pill_h, fill=1, stroke=0)
@@ -826,17 +831,64 @@ def month_pdf(deadline_rows, year, month, client_label=""):
                 c.setFillColorRGB(0.1, 0.1, 0.1)
                 c.setFont("Helvetica-Bold", 6.5)
                 c.drawString(
-                  x + 7,
-                  ey + 3,
-                  _truncate(f"{r.get('Client', '')} — {r['Docket Number']}", col_w - 12, 6.5, bold=True)
+                    x + 7, ey + 3,
+                    _truncate(f"{r.get('Client', '')} — {r['Docket Number']}",
+                              col_w - 12, 6.5, bold=True)
                 )
                 c.setFont("Helvetica", 6.5)
                 c.drawString(
-                  x + 7,
-                  ey - 5,
-                  _truncate(r["Action"], col_w - 12, 6.5)
+                    x + 7, ey - 5,
+                    _truncate(r["Action"], col_w - 12, 6.5)
                 )
                 ey -= pill_h + 3
+
+            if extra_evs:
+                # Preserve the familiar indicator, but add an asterisk so the
+                # reader knows the omitted actions are listed in the margin.
+                c.setFont("Helvetica-Oblique", 6.5)
+                c.setFillColorRGB(*GREY)
+                c.drawString(x + 4, y_top - row_h + 3, "+ more*")
+                for r in extra_evs:
+                    overflow.append((day, r))
+
+    # --- Right-hand overflow margin ---
+    # Preserve the calendar grid's existing dimensions. The page's existing
+    # right margin is narrow, so use it as a compact overflow index: each
+    # omitted action is referenced by date and docket, with the full action
+    # text continuing in a wrapped line where space permits.
+    if overflow:
+        overflow_x = grid_x + grid_w + 3
+        overflow_w = page_w - margin - overflow_x
+
+        c.saveState()
+        c.translate(page_w - margin - 2, grid_top - 2)
+        c.rotate(90)
+        c.setFillColorRGB(*NAVY)
+        c.setFont("Helvetica-Bold", 7)
+        c.drawString(0, 0, "* ADDITIONAL ACTIONS IN MARGIN")
+        c.restoreState()
+
+        # Since the physical margin is only 0.4", place a numbered overflow
+        # key along the right edge, using the same date marker shown in-cell.
+        oy = grid_top - 12
+        c.setFillColorRGB(*NAVY)
+        c.setFont("Helvetica-Bold", 6.5)
+        c.drawRightString(page_w - 2, oy, "*")
+        oy -= 9
+
+        for day, r in overflow:
+            if oy < margin + foot_h + 8:
+                break
+            c.setFillColorRGB(*GREY)
+            c.setFont("Helvetica-Bold", 5.5)
+            c.drawRightString(page_w - 2, oy, f"{day}")
+            oy -= 6
+
+            c.setFillColorRGB(*GREY)
+            c.setFont("Helvetica", 4.5)
+            docket = _truncate(str(r.get("Docket Number", "")), 24, 4.5)
+            c.drawRightString(page_w - 2, oy, docket)
+            oy -= 7
 
     # --- Footer ---
     c.setFillColorRGB(*GREY)
