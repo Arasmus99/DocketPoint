@@ -222,6 +222,10 @@ DUE_LINE_RE = re.compile(r"\b(due|by)\b", re.IGNORECASE)
 # "w/ext up to 2/11/27", "w/ ext. to 2/11/27", "with extension through 2/11/27"
 MAX_EXT_MONTHS = 6      # longer extension periods get flagged for review
 
+# Loose net for any extension mention; lines it catches that EXT_RE can't
+# parse get flagged so the extension months aren't silently lost.
+EXT_HINT_RE = re.compile(r"\bext(?:ension|ended|\.)?s?\b|w/\s*ext", re.IGNORECASE)
+
 EXT_RE = re.compile(
     r"\b(?:w/|with)\s*ext(?:ension|\.)?s?\s*(?:up\s+)?(?:to|thru|through|until)\s*"
     r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
@@ -518,11 +522,13 @@ def find_dates(lines):
 
     * A *due date* is any date that sits on a line containing 'due'/'by'.
     * The *filing date* is the first non-due date (typically next to the app #).
-    Returns (filing_date, [ {action, date}, ... ], [undated_action, ...]).
+    Returns (filing_date, [ {action, date}, ... ], [undated_action, ...],
+             [flag, ...]).
     """
     filing = None
     deadlines = []
     undated = []
+    flags = []
 
     for line in lines:
         line = line.strip()
@@ -531,7 +537,15 @@ def find_dates(lines):
         dates_on_line = DATE_RE.findall(line)
         is_due = bool(DUE_LINE_RE.search(line))
 
+        # Any date-shaped token the parser rejects (e.g. 2/30/27).
+        for raw in dates_on_line:
+            if not _norm_date(raw):
+                flags.append(f'Unreadable date "{raw}" in "{line}"')
+
         if is_due:
+            if EXT_HINT_RE.search(line) and not EXT_RE.search(line):
+                flags.append(f'Extension wording not recognized, extension months '
+                             f'not generated: "{line}"')
             ext_m = EXT_RE.search(line)
             if ext_m and dates_on_line:
                 deadlines.extend(_expand_extension(line, ext_m))
@@ -550,6 +564,7 @@ def find_dates(lines):
                 # date (common in narrative notes) isn't logged as an action.
                 if re.search(r"\bdue\b", line, re.IGNORECASE):
                     undated.append(line)
+                    flags.append(f'"Due" with no date: "{line}"')
         else:
             for raw in dates_on_line:
                 nd = _norm_date(raw)
@@ -557,7 +572,7 @@ def find_dates(lines):
                     filing = nd
                     break
 
-    return filing, deadlines, undated
+    return filing, deadlines, undated, flags
 
 
 # --------------------------------------------------------------------------- #
@@ -580,12 +595,20 @@ def parse_box(text, slide_num, docket_re=None):
         return None
 
     docket = None
+    full_docket = None
     # 1) Learned pattern, anchored to the box's first token.
     if docket_re is not None:
         ft = _first_token(raw)
         m = docket_re.match(ft)
         if m:
             docket = m.group(0)
+            # The learned pattern can stop short of a sub-case suffix
+            # (01394-0005-00HK-CN, 01394-0003-00MO-01CN). Keep the full token
+            # as the docket so distinct sub-cases stay distinct, but resolve
+            # the country from the matched core, as before.
+            rest = ft[len(docket):]
+            if rest and re.fullmatch(r"(?:-[A-Za-z0-9]+)+", rest):
+                full_docket = ft
     # 2) Fallback: the built-in multi-format pattern, searched anywhere.
     if docket is None:
         m = DOCKET_RE.search(raw)
@@ -602,6 +625,8 @@ def parse_box(text, slide_num, docket_re=None):
     app_no, country = (None, None)
     if docket:
         app_no, country = find_application_number(raw, docket)
+        if full_docket:
+            docket = full_docket
         # Single-identifier box like "I338684B  TW": the detector treated the
         # number as a docket, but it's really the application/grant number with
         # no separate docket. Re-assign so the number isn't lost.
@@ -612,7 +637,7 @@ def parse_box(text, slide_num, docket_re=None):
     elif pct:
         country = "PCT"
 
-    filing, deadlines, undated = find_dates(lines)
+    filing, deadlines, undated, flags = find_dates(lines)
 
     status_m = STATUS_RE.search(raw)
     status = status_m.group(0).upper() if status_m else ""
@@ -628,6 +653,7 @@ def parse_box(text, slide_num, docket_re=None):
         "status": status,
         "deadlines": deadlines,
         "undated_actions": undated,
+        "flags": flags,
         "raw_text": raw,
     }
 
@@ -682,6 +708,56 @@ def _join_deadlines(case):
     return "; ".join(parts)
 
 
+def _action_key(action):
+    """Normalize an action label for comparison across boxes."""
+    a = re.sub(r"\s*\(ext\..*\)$", "", action)
+    a = re.sub(r"\b(due|by)\b", "", a, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", a).strip().lower()
+
+
+def _duplicate_docket_flags(cases):
+    """
+    A docket appearing in more than one box is fine when the boxes agree. Flag
+    it when they disagree on application number, filing date, or the date of
+    the same action. Returns {id(case): [flag, ...]}.
+    """
+    by_docket = {}
+    for c in cases:
+        if c["docket"]:
+            by_docket.setdefault(c["docket"], []).append(c)
+
+    out = {}
+    for docket, group in by_docket.items():
+        if len(group) < 2:
+            continue
+        slides = ", ".join(str(c["slide"]) for c in group)
+        msgs = []
+        for field, label in (("application_number", "application number"),
+                             ("filing_date", "filing date")):
+            vals = {c[field] for c in group if c[field]}
+            # J/008517 and J/8517 are the same number: compare with spacing,
+            # commas and leading zeros removed.
+            norm = {re.sub(r"(?<!\d)0+(?=\d)", "", re.sub(r"[\s,]", "", v))
+                    for v in vals}
+            if len(norm) > 1:
+                msgs.append(f"Docket appears on slides {slides} with different "
+                            f"{label}s ({', '.join(sorted(vals))})")
+        dates_by_action = {}
+        for c in group:
+            for d in c["deadlines"]:
+                if "(ext." in d["action"]:
+                    continue
+                dates_by_action.setdefault(_action_key(d["action"]), set()).add(d["date"])
+        for act, dates in sorted(dates_by_action.items()):
+            if len(dates) > 1:
+                msgs.append(f'Docket appears on slides {slides} with different dates '
+                            f'for "{act}" ({", ".join(sorted(dates))})')
+        if msgs:
+            for c in group:
+                out[id(c)] = msgs
+    return out
+
+
 def cases_to_rows(cases, client, deadline_cutoff=None):
     """
     Build (deadline_rows, case_rows) as lists of dicts.
@@ -692,20 +768,28 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
     calendar), so the cutoff never removes a case from it.
     """
     case_rows, deadline_rows, seen = [], [], set()
+    dup_flags = _duplicate_docket_flags(cases)
 
     for c in cases:
-        # Flag rows a human should eyeball: an identifier was captured but the
-        # jurisdiction couldn't be resolved (often a typo in the source slide),
-        # or a docket has no application/PCT/WIPO number at all.
-        review = ""
+        # Deadline-level: a due date earlier than the filing date.
+        if c["filing_date"]:
+            filed = datetime.strptime(c["filing_date"], "%m/%d/%Y").date()
+            for d in c["deadlines"]:
+                if datetime.strptime(d["date"], "%m/%d/%Y").date() < filed:
+                    msg = f'Due date {d["date"]} precedes filing date {c["filing_date"]}'
+                    d["flag"] = "; ".join(filter(None, [d.get("flag", ""), msg]))
+
+        # Case-level review reasons, most specific first.
+        reasons = []
         if c["docket"] and c["application_number"] and not c["country"]:
-            review = "Check: country not resolved"
-        elif c["docket"] and not c["application_number"] \
-                and not c["pct_number"] and not c["wipo_number"]:
-            review = "Check: no application number"
-        ext_flags = sorted({d["flag"] for d in c["deadlines"] if d.get("flag")})
-        if ext_flags:
-            review = "; ".join(filter(None, [review] + [f"Check: {f}" for f in ext_flags]))
+            reasons.append("country not resolved")
+        reasons += c.get("flags", [])
+        for d in c["deadlines"]:
+            for f in (d.get("flag") or "").split("; "):
+                if f and f not in reasons:
+                    reasons.append(f)
+        reasons += dup_flags.get(id(c), [])
+        review = "; ".join(f"Check: {r}" for r in reasons)
 
         case_rows.append({
             "Review": review,
