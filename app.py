@@ -7,6 +7,7 @@ import calendar
 import pandas as pd
 import streamlit as st
 from dateutil.parser import parse as parse_date
+from dateutil.relativedelta import relativedelta
 from pptx import Presentation
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -218,6 +219,13 @@ US_GRANT_RE = re.compile(r"\b\d{1,2},\d{3},\d{3}\b")
 DATE_RE = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
 DUE_LINE_RE = re.compile(r"\b(due|by)\b", re.IGNORECASE)
 
+# "w/ext up to 2/11/27", "w/ ext. to 2/11/27", "with extension through 2/11/27"
+EXT_RE = re.compile(
+    r"\b(?:w/|with)\s*ext(?:ension|\.)?s?\s*(?:up\s+)?(?:to|thru|through|until)\s*"
+    r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+    re.IGNORECASE,
+)
+
 STATUS_RE = re.compile(r"\b(ABN|ABANDONED|WITHDRAWN|PENDING|GRANTED|ISSUED|EXPIRED)\b",
                        re.IGNORECASE)
 
@@ -428,6 +436,61 @@ def _norm_date(raw):
         return None
 
 
+def _expand_extension(line, ext_m):
+    """
+    Turn "OA due 11/16/26 w/ext up to 2/11/27" into the base deadline plus one
+    deadline for each extension month, ending on the stated extension date:
+        11/16/26  OA due
+        12/16/26  OA (ext. month 1 of 3)
+        01/16/27  OA (ext. month 2 of 3)
+        02/11/27  OA (ext. month 3 of 3, final)
+    Each month is counted from the original due date, so a due date on the
+    31st lands on the last day of shorter months rather than drifting.
+    The lookback cutoff later drops months that have passed, so only the
+    extension months still available appear.
+    """
+    head = line[:ext_m.start()]
+    base_raw = next((r for r in DATE_RE.findall(head)), None)
+    ext_nd = _norm_date(ext_m.group(1))
+    if not base_raw:
+        # "Response w/ext up to 2/11/27" with no base date: keep the one date.
+        action = head.strip(" :-\u2013") or line.strip()
+        return [{"action": f"{action} (ext. final)", "date": ext_nd}] if ext_nd else []
+
+    base_nd = _norm_date(base_raw)
+    if not base_nd:
+        return []
+    idx = head.find(base_raw)
+    base_action = head[:idx].strip(" :-\u2013") or head.strip()
+    label = re.sub(r"\s*\b(due|by)\s*$", "", base_action, flags=re.IGNORECASE) or base_action
+    out = [{"action": base_action, "date": base_nd}]
+    if not ext_nd:
+        return out
+
+    base = datetime.strptime(base_nd, "%m/%d/%Y").date()
+    end = datetime.strptime(ext_nd, "%m/%d/%Y").date()
+    if end <= base:
+        out.append({"action": f"{label} ext. to {ext_nd} "
+                              f"[CHECK: ext. date precedes due date]",
+                    "date": ext_nd})
+        return out
+
+    dates = []
+    k = 1
+    while True:
+        d = base + relativedelta(months=k)
+        if d >= end:
+            break
+        dates.append(d)
+        k += 1
+    dates.append(end)          # the stated extension date is always the last
+    n = len(dates)
+    for i, d in enumerate(dates, start=1):
+        tag = f"ext. month {i} of {n}" + (", final" if i == n else "")
+        out.append({"action": f"{label} ({tag})", "date": d.strftime("%m/%d/%Y")})
+    return out
+
+
 def find_dates(lines):
     """
     Split dates into a single filing date and a list of due-date deadlines.
@@ -448,7 +511,10 @@ def find_dates(lines):
         is_due = bool(DUE_LINE_RE.search(line))
 
         if is_due:
-            if dates_on_line:
+            ext_m = EXT_RE.search(line)
+            if ext_m and dates_on_line:
+                deadlines.extend(_expand_extension(line, ext_m))
+            elif dates_on_line:
                 for raw in dates_on_line:
                     nd = _norm_date(raw)
                     if not nd:
@@ -615,6 +681,9 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
         elif c["docket"] and not c["application_number"] \
                 and not c["pct_number"] and not c["wipo_number"]:
             review = "Check: no application number"
+        if any("[CHECK: ext." in d["action"] for d in c["deadlines"]):
+            review = "; ".join(filter(None, [
+                review, "Check: extension date precedes due date"]))
 
         case_rows.append({
             "Review": review,
