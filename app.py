@@ -477,9 +477,9 @@ def _expand_extension(line, ext_m):
     end = datetime.strptime(ext_nd, "%m/%d/%Y").date()
     if end <= base:
         msg = (f"Extension date {ext_nd} is not after due date {base_nd}")
+        # The extension date is unusable, so post only the base due date,
+        # flagged; the flagged-entries box reports the reason.
         out[0]["flag"] = msg
-        out.append({"action": f"{label} (ext. date as entered)",
-                    "date": ext_nd, "flag": msg})
         return out
 
     # The extension should end on a monthly anniversary of the due date
@@ -697,7 +697,6 @@ def extract_cases(pptx_source):
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
 BODY_FONT = Font(name="Arial", size=10)
-FLAG_FILL = PatternFill("solid", fgColor="FFF2CC")
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -825,8 +824,7 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
     if deadline_cutoff is not None:
         deadline_rows = [
             r for r in deadline_rows
-            if r["Review"]      # a flagged entry stays visible even if past
-            or datetime.strptime(r["Due Date"], "%m/%d/%Y").date() >= deadline_cutoff
+            if datetime.strptime(r["Due Date"], "%m/%d/%Y").date() >= deadline_cutoff
         ]
     return deadline_rows, case_rows
 
@@ -851,7 +849,7 @@ def _write_sheet(ws, rows, columns, date_cols=()):
             cell.font = BODY_FONT
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top",
-                                       wrap_text=(col_name in ("Due Dates / Actions", "Review")))
+                                       wrap_text=(col_name == "Due Dates / Actions"))
             val = cell.value
             if val not in (None, ""):
                 widths[col_name] = max(widths[col_name], min(len(str(val)), 60))
@@ -859,12 +857,6 @@ def _write_sheet(ws, rows, columns, date_cols=()):
     for col_idx, col_name in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = widths[col_name] + 2
 
-    # Highlight every row that carries a Review flag, whether or not the
-    # Review column itself is written to this sheet.
-    for r, row in enumerate(rows, start=2):
-        if row.get("Review"):
-            for col_idx in range(1, len(columns) + 1):
-                ws.cell(row=r, column=col_idx).fill = FLAG_FILL
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{ws.max_row}"
@@ -892,7 +884,7 @@ def build_workbook_from_rows(deadline_rows, case_rows):
 
     ws2 = wb.create_sheet("All Cases")
     _write_sheet(ws2, case_rows,
-                 ["Review", "Client", "Slide", "Docket Number", "Country",
+                 ["Client", "Slide", "Docket Number", "Country",
                   "Application Number", "PCT Number", "WIPO Number",
                   "Filing Date", "Status", "Due Dates / Actions"])
 
@@ -1370,18 +1362,11 @@ tab1, tab2, tab3 = st.tabs([f"\U0001F4CB Deadlines ({len(deadlines_df)})",
                             f"\U0001F5C2\uFE0F All Cases ({len(cases_df)})",
                             "\U0001F4C5 Calendar"])
 with tab1:
-    if deadlines_df.empty:
-        st.dataframe(deadlines_df, use_container_width=True, hide_index=True)
-    else:
-        flags = deadlines_df["Review"].astype(bool)
-        shown = deadlines_df.drop(columns=["Review"])
-        st.dataframe(
-            shown.style.apply(
-                lambda row: ["background-color: #FFF2CC" if flags[row.name] else ""]
-                            * len(row), axis=1),
-            use_container_width=True, hide_index=True)
+    st.dataframe(deadlines_df.drop(columns=["Review"], errors="ignore"),
+                 use_container_width=True, hide_index=True)
 with tab2:
-    st.dataframe(cases_df, use_container_width=True, hide_index=True)
+    st.dataframe(cases_df.drop(columns=["Review"], errors="ignore"),
+                 use_container_width=True, hide_index=True)
 with tab3:
     months = deadline_months(deadline_rows)
     if not months:
