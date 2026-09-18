@@ -859,13 +859,12 @@ def _write_sheet(ws, rows, columns, date_cols=()):
     for col_idx, col_name in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = widths[col_name] + 2
 
-    # Highlight every row that carries a Review flag.
-    if "Review" in columns:
-        rcol = columns.index("Review") + 1
-        for r in range(2, ws.max_row + 1):
-            if ws.cell(row=r, column=rcol).value:
-                for col_idx in range(1, len(columns) + 1):
-                    ws.cell(row=r, column=col_idx).fill = FLAG_FILL
+    # Highlight every row that carries a Review flag, whether or not the
+    # Review column itself is written to this sheet.
+    for r, row in enumerate(rows, start=2):
+        if row.get("Review"):
+            for col_idx in range(1, len(columns) + 1):
+                ws.cell(row=r, column=col_idx).fill = FLAG_FILL
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{ws.max_row}"
@@ -888,7 +887,7 @@ def build_workbook_from_rows(deadline_rows, case_rows):
     ws1 = wb.active
     ws1.title = "Deadlines"
     _write_sheet(ws1, deadline_rows,
-                 ["Review", "Due Date", "Action", "Docket Number", "Country",
+                 ["Due Date", "Action", "Docket Number", "Country",
                   "Application Number", "Client", "Slide"])
 
     ws2 = wb.create_sheet("All Cases")
@@ -1371,7 +1370,16 @@ tab1, tab2, tab3 = st.tabs([f"\U0001F4CB Deadlines ({len(deadlines_df)})",
                             f"\U0001F5C2\uFE0F All Cases ({len(cases_df)})",
                             "\U0001F4C5 Calendar"])
 with tab1:
-    st.dataframe(deadlines_df, use_container_width=True, hide_index=True)
+    if deadlines_df.empty:
+        st.dataframe(deadlines_df, use_container_width=True, hide_index=True)
+    else:
+        flags = deadlines_df["Review"].astype(bool)
+        shown = deadlines_df.drop(columns=["Review"])
+        st.dataframe(
+            shown.style.apply(
+                lambda row: ["background-color: #FFF2CC" if flags[row.name] else ""]
+                            * len(row), axis=1),
+            use_container_width=True, hide_index=True)
 with tab2:
     st.dataframe(cases_df, use_container_width=True, hide_index=True)
 with tab3:
