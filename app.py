@@ -220,6 +220,8 @@ DATE_RE = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
 DUE_LINE_RE = re.compile(r"\b(due|by)\b", re.IGNORECASE)
 
 # "w/ext up to 2/11/27", "w/ ext. to 2/11/27", "with extension through 2/11/27"
+MAX_EXT_MONTHS = 6      # longer extension periods get flagged for review
+
 EXT_RE = re.compile(
     r"\b(?:w/|with)\s*ext(?:ension|\.)?s?\s*(?:up\s+)?(?:to|thru|through|until)\s*"
     r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
@@ -470,10 +472,26 @@ def _expand_extension(line, ext_m):
     base = datetime.strptime(base_nd, "%m/%d/%Y").date()
     end = datetime.strptime(ext_nd, "%m/%d/%Y").date()
     if end <= base:
-        out.append({"action": f"{label} ext. to {ext_nd} "
-                              f"[CHECK: ext. date precedes due date]",
-                    "date": ext_nd})
+        msg = (f"Extension date {ext_nd} is not after due date {base_nd}")
+        out[0]["flag"] = msg
+        out.append({"action": f"{label} (ext. date as entered)",
+                    "date": ext_nd, "flag": msg})
         return out
+
+    # The extension should end on a monthly anniversary of the due date
+    # (1/31 -> 4/30 counts, since shorter months clamp to their last day).
+    n_months = (end.year - base.year) * 12 + (end.month - base.month)
+    expected = base + relativedelta(months=n_months)
+    flag = ""
+    if expected != end:
+        flag = (f"Extension date {ext_nd} does not fall a whole number of "
+                f"months after due date {base_nd} "
+                f"(expected {expected.strftime('%m/%d/%Y')})")
+    elif n_months > MAX_EXT_MONTHS:
+        flag = (f"Extension runs {n_months} months past due date {base_nd}; "
+                f"more than {MAX_EXT_MONTHS} is unusual")
+    if flag:
+        out[0]["flag"] = flag
 
     dates = []
     k = 1
@@ -487,7 +505,10 @@ def _expand_extension(line, ext_m):
     n = len(dates)
     for i, d in enumerate(dates, start=1):
         tag = f"ext. month {i} of {n}" + (", final" if i == n else "")
-        out.append({"action": f"{label} ({tag})", "date": d.strftime("%m/%d/%Y")})
+        row = {"action": f"{label} ({tag})", "date": d.strftime("%m/%d/%Y")}
+        if flag:
+            row["flag"] = flag
+        out.append(row)
     return out
 
 
@@ -650,6 +671,7 @@ def extract_cases(pptx_source):
 HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF", size=11)
 BODY_FONT = Font(name="Arial", size=10)
+FLAG_FILL = PatternFill("solid", fgColor="FFF2CC")
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -681,9 +703,9 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
         elif c["docket"] and not c["application_number"] \
                 and not c["pct_number"] and not c["wipo_number"]:
             review = "Check: no application number"
-        if any("[CHECK: ext." in d["action"] for d in c["deadlines"]):
-            review = "; ".join(filter(None, [
-                review, "Check: extension date precedes due date"]))
+        ext_flags = sorted({d["flag"] for d in c["deadlines"] if d.get("flag")})
+        if ext_flags:
+            review = "; ".join(filter(None, [review] + [f"Check: {f}" for f in ext_flags]))
 
         case_rows.append({
             "Review": review,
@@ -704,6 +726,7 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
                 continue
             seen.add(key)
             deadline_rows.append({
+                "Review": d.get("flag", ""),
                 "Due Date": d["date"],
                 "Action": d["action"],
                 "Docket Number": c["docket"],
@@ -718,7 +741,8 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
     if deadline_cutoff is not None:
         deadline_rows = [
             r for r in deadline_rows
-            if datetime.strptime(r["Due Date"], "%m/%d/%Y").date() >= deadline_cutoff
+            if r["Review"]      # a flagged entry stays visible even if past
+            or datetime.strptime(r["Due Date"], "%m/%d/%Y").date() >= deadline_cutoff
         ]
     return deadline_rows, case_rows
 
@@ -743,13 +767,21 @@ def _write_sheet(ws, rows, columns, date_cols=()):
             cell.font = BODY_FONT
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top",
-                                       wrap_text=(col_name == "Due Dates / Actions"))
+                                       wrap_text=(col_name in ("Due Dates / Actions", "Review")))
             val = cell.value
             if val not in (None, ""):
                 widths[col_name] = max(widths[col_name], min(len(str(val)), 60))
 
     for col_idx, col_name in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = widths[col_name] + 2
+
+    # Highlight every row that carries a Review flag.
+    if "Review" in columns:
+        rcol = columns.index("Review") + 1
+        for r in range(2, ws.max_row + 1):
+            if ws.cell(row=r, column=rcol).value:
+                for col_idx in range(1, len(columns) + 1):
+                    ws.cell(row=r, column=col_idx).fill = FLAG_FILL
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{ws.max_row}"
@@ -772,7 +804,7 @@ def build_workbook_from_rows(deadline_rows, case_rows):
     ws1 = wb.active
     ws1.title = "Deadlines"
     _write_sheet(ws1, deadline_rows,
-                 ["Due Date", "Action", "Docket Number", "Country",
+                 ["Review", "Due Date", "Action", "Docket Number", "Country",
                   "Application Number", "Client", "Slide"])
 
     ws2 = wb.create_sheet("All Cases")
@@ -1233,6 +1265,16 @@ cases_df = pd.DataFrame(case_rows)
 # row-level Client value. The row-level values were already populated from
 # each PowerPoint filename above.
 client_label = all_cases[0][0] if len(all_cases) == 1 else "Combined"
+
+# --- Review flags --------------------------------------------------------- #
+flagged = [r for r in case_rows if r["Review"]]
+if flagged:
+    st.warning(f"\u26A0\uFE0F {len(flagged)} case(s) need review before relying "
+               f"on the deadlines below.")
+    with st.expander("Show flagged entries", expanded=True):
+        st.dataframe(pd.DataFrame(flagged)[["Docket Number", "Slide", "Review",
+                                            "Due Dates / Actions"]],
+                     use_container_width=True, hide_index=True)
 
 # --- Summary metrics ------------------------------------------------------ #
 m1, m2, m3 = st.columns(3)
