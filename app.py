@@ -1437,6 +1437,10 @@ st.markdown("""
   body.dp-dragging [data-testid="stFileUploaderDropzone"],
   body.dp-dragging [data-testid="stFileUploadDropzone"] {
     position:fixed !important; inset:0 !important; z-index:1000000 !important;
+    /* Some Streamlit releases give the drop zone a fixed height, which
+       overrides inset:0 and leaves a 68px strip at the top of the page. */
+    width:auto !important; height:auto !important;
+    min-height:0 !important; max-height:none !important; max-width:none !important;
     margin:0 !important; border-radius:0 !important;
     background:rgba(31,56,100,.90) !important;
     border:4px dashed #fff !important;
