@@ -113,6 +113,30 @@ def detect_docket_regex(box_texts):
     threshold = max(3, int(0.04 * len(box_texts)))
     keep = [s for s, n in sigs.items()
             if n >= threshold and _sig_is_docket_shaped(s)]
+
+    # Two-group all-numeric dockets (Foley: 145737-0107) abstract to '#-#',
+    # which _sig_is_docket_shaped() rejects because a Japanese serial
+    # (2016-502307) has the same shape. Accept '#-#' only when it is the
+    # deck's dominant leading signature, and pin the regex to the digit widths
+    # actually observed, excluding any width that is a known application-number
+    # format. Pinned widths keep a JP serial that leads a box from being
+    # mistaken for a docket.
+    numeric_res = []
+    top_sig, top_n = sigs.most_common(1)[0]
+    if top_sig == "#-#" and top_n >= threshold:
+        widths = set()
+        for c in cands:
+            if _signature(c) != "#-#":
+                continue
+            if any(rx.fullmatch(c) for rx in COUNTRY_APP_RES.values()):
+                continue
+            a, b = c.split("-")
+            widths.add((len(a), len(b)))
+        for a, b in sorted(widths, key=lambda w: sum(w), reverse=True):
+            numeric_res.append(r"\d{%d}-\d{%d}(?!\d)" % (a, b))
+        if numeric_res:
+            keep.append(top_sig)
+
     if not keep:
         # nothing cleared the bar; take the most common docket-shaped signature
         keep = [s for s, _ in sigs.most_common() if _sig_is_docket_shaped(s)][:1]
@@ -122,7 +146,11 @@ def detect_docket_regex(box_texts):
     # Longest signatures first so a fuller docket wins over a prefix of itself
     # (e.g. P6046729PCT-CN before P6046729EP's @#@).
     keep.sort(key=len, reverse=True)
-    pattern = "|".join(_sig_to_regex(s) for s in keep)
+    parts = []
+    for s in keep:
+        parts.extend(numeric_res if s == "#-#" and numeric_res
+                     else [_sig_to_regex(s)])
+    pattern = "|".join(parts)
     return re.compile(r"^(?:%s)" % pattern), keep
 
 
@@ -172,6 +200,7 @@ DOCKET_RE = re.compile(
 CLIENT_CODE_RES = [
     re.compile(r"\b\d{4,5}-\d{3}[A-Za-z][A-Za-z0-9-]*"),   # 15080-101EP1, 15040-004CN2-MO
     re.compile(r"\b\d{3}[A-Z]{2,3}P?\d*\b"),               # 107USP1, 107USP2
+    re.compile(r"\b\d{6}-\d{3,5}\b"),                      # 145737-0107, 107688-00010
 ]
 
 
@@ -217,6 +246,10 @@ WIPO_RE = re.compile(r"\bWO\s?\d{4}/?\d{6}(?:\s?A\d)?\b")
 US_GRANT_RE = re.compile(r"\b\d{1,2},\d{3},\d{3}\b")
 
 DATE_RE = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
+# A date missing its second separator ("11/1526", "1/727"). DATE_RE skips it,
+# so without a flag the deadline is silently lost or mislabeled. The
+# lookarounds keep US serials (63/109,095) and longer numbers out.
+MALFORMED_DATE_RE = re.compile(r"(?<![\d/])\d{1,2}/\d{3,4}(?![\d,/])")
 DUE_LINE_RE = re.compile(r"\b(due|by)\b", re.IGNORECASE)
 
 # "w/ext up to 2/11/27", "w/ ext. to 2/11/27", "with extension through 2/11/27"
@@ -275,6 +308,7 @@ def _country_from_app_line(text):
         '19/257,226  USC4'   -> US   (continuation 4)
         '63/891,043  US P2'  -> US   (provisional 2)
         '62025115409.7 HK-CN'-> HK   (HK based on a CN parent)
+        '42025102468.3 HKCND1'-> HK  (HK based on CN divisional 1)
         '...  EP D1'         -> EP   (divisional 1)
     Returns the first jurisdiction code found.
     """
@@ -282,7 +316,7 @@ def _country_from_app_line(text):
         line = line.rstrip()
         # <app-number char> <space> <CC> [optional tag: space/hyphen + letters/digits]
         m = re.search(
-            r"[\dA-Za-z,./)\-]\s+([A-Z]{2})(?:[\s\-]?[A-Z]{0,2}\d{0,2}|\d{1,2})?\s*$",
+            r"[\dA-Za-z,./)\-]\s+([A-Z]{2})(?:[\s\-]?[A-Z]{0,3}\d{0,2}|\d{1,2})?\s*$",
             line,
         )
         if m and m.group(1) in KNOWN_COUNTRIES:
@@ -541,6 +575,8 @@ def find_dates(lines):
         for raw in dates_on_line:
             if not _norm_date(raw):
                 flags.append(f'Unreadable date "{raw}" in "{line}"')
+        for raw in MALFORMED_DATE_RE.findall(line):
+            flags.append(f'Malformed date "{raw}" in "{line}"')
 
         if is_due:
             if EXT_HINT_RE.search(line) and not EXT_RE.search(line):
@@ -804,7 +840,12 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
             "Due Dates / Actions": _join_deadlines(c),
         })
         for d in c["deadlines"]:
-            key = (client, c["docket"], d["action"], d["date"])
+            # Key on the case identifier as well as the docket: a box with no
+            # docket (docket None) must not collapse into another undocketed
+            # box that happens to carry the same action and date.
+            ident = (c["application_number"] or c["pct_number"]
+                     or c["wipo_number"])
+            key = (client, c["docket"], ident, d["action"], d["date"])
             if key in seen:
                 continue
             seen.add(key)
