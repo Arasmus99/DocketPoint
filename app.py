@@ -219,7 +219,7 @@ COUNTRY_APP_RES = {
     "EP": re.compile(r"\b\d{8}\.\d\b"),                   # 14764430.6
     "JP": re.compile(r"\b\d{4}\s*[-\u2013\u2014]\s*\d{6}\b"),   # 2016-502307 ; 2023 \u2013 526861
     "KR": re.compile(r"\b10-\d{4}-\d{7}\b"),              # 10-2017-7008850
-    "CN": re.compile(r"(?<!\d)\d{12}\.\s?[\dX](?!\d)"),   # 201580054350.9 / .X / ZL-prefixed
+    "CN": re.compile(r"(?<!\d)\d{12}\.?\s?[\dX](?!\d)"),  # 201580054350.9 / .X / 2019800192996
     "IN": re.compile(r"\b\d{12}\b"),                      # 201747008733
     "AU": re.compile(r"\b\d{10}\b"),                      # 2015317972
     "TW": re.compile(r"\b\d{9}\b"),                       # 112127315
@@ -239,6 +239,7 @@ COUNTRY_APP_RES = {
     "MO": re.compile(r"\bJ/\d+\b"),                       # J/008517 (Macau)
     "VE": re.compile(r"\b\d{6}-\d{4}\b"),                 # 000115-2015
     "PH": re.compile(r"\b1-\d{4}-\d{6}\b"),               # 1-2006-501916
+    "GB": re.compile(r"\b\d{7}\.\d\b"),                    # 2502428.2
 }
 
 # Order used for the "try everything" fallback when the docket country is
@@ -301,7 +302,8 @@ def _country_from_docket_suffix(docket):
     if "MO" in docket:
         return "MO"
     last = docket.split("-")[-1]
-    m = re.match(r"\d*([A-Z]{2,4})$", last)
+    # 00EP, P2731KR, P6046729US1, P3900GBp (GB provisional)
+    m = re.search(r"([A-Z]{2,4})[a-z]?\d*$", last)
     return m.group(1) if m else None
 
 
@@ -332,6 +334,10 @@ def _country_from_app_line(text):
     """
     for line in text.splitlines():
         line = line.rstrip()
+        # A list of codes ("Designated States: DE, FR, GB") names no
+        # jurisdiction for the application itself.
+        if re.search(r"\b[A-Z]{2},\s*[A-Z]{2}\b", line):
+            continue
         # <app-number char> <space> <CC> [optional tag: space/hyphen + letters/digits]
         m = re.search(
             r"[\dA-Za-z,./)\-]\s+([A-Z]{2})(?:[\s\-]?[A-Z]{0,3}\d{0,2}|\d{1,2})?\s*$",
@@ -339,7 +345,32 @@ def _country_from_app_line(text):
         )
         if m and m.group(1) in KNOWN_COUNTRIES:
             return m.group(1)
+        # The code can also sit mid-line, followed by a grant or publication
+        # number or a date: "10-2020-7004080  KR 10-2676822",
+        # "2502428.2  GB  2/19/2025". The token before it must hold a digit
+        # and not be a date, which keeps "due 8/19/27 ..." out.
+        for m in re.finditer(r"(\S*\d\S*)\s+([A-Z]{2})(?=\s|$)", line):
+            if (m.group(2) in KNOWN_COUNTRIES
+                    and not DATE_RE.fullmatch(m.group(1))):
+                return m.group(2)
     return None
+
+
+# Codes accepted from a docket suffix: every ISO 3166 country plus the regional
+# offices. Broader than KNOWN_COUNTRIES, which guards the looser match against
+# free text on an application-number line.
+DOCKET_SUFFIX_CODES = KNOWN_COUNTRIES | {"PCT", "EP", "EA", "AP", "OA", "GC"} | set(
+    "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ "
+    "BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR "
+    "CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR "
+    "GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU "
+    "ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ "
+    "LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ "
+    "MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF "
+    "PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI "
+    "SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR "
+    "TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split()
+)
 
 
 def get_country(docket, text=""):
@@ -354,10 +385,12 @@ def get_country(docket, text=""):
     Normalizes EU -> EP since both denote a European application here.
     """
     suffix = _country_from_docket_suffix(docket)
-    # A docket suffix like "-PRO" (provisional) names a filing type, not a
-    # jurisdiction. Country codes have two letters; PCT and WO are the only
-    # longer suffixes that identify where a case was filed.
-    if suffix and len(suffix) != 2 and suffix not in ("PCT", "WO"):
+    # A docket suffix like "-PRO" (provisional) or "PC1T" (a typo) names no
+    # jurisdiction. Only a real country or regional code counts, and a WO
+    # suffix (P62011796WO) marks the PCT application itself.
+    if suffix == "WO":
+        suffix = "PCT"
+    elif suffix not in DOCKET_SUFFIX_CODES:
         suffix = None
     country = _country_from_app_line(text) or suffix
     if country is None and re.search(r"\b\d{2}/\d{3},\d{3}\b", text):
@@ -397,9 +430,12 @@ def find_application_number(text, docket):
     if country == "PCT":
         return None, country
 
-    # A box whose only identifier is a PCT number (no national jurisdiction
-    # code present) is a PCT filing -- don't coin a serial from the PCT digits.
-    if country is None and PCT_RE.search(text):
+    # A box whose only identifier is a PCT number (no national application
+    # line) is a PCT filing, even when the docket names a country
+    # (P4070GBp over PCT/GB2026/050238) -- don't coin a serial from the PCT
+    # digits.
+    if (PCT_RE.search(text) and not _country_from_app_line(text)
+            and not US_SERIAL_RE.search(text)):
         return None, "PCT"
 
     # 1) Use the jurisdiction's own pattern. For a known country we trust only
@@ -613,13 +649,17 @@ def find_dates(lines):
             if ext_m and dates_on_line:
                 deadlines.extend(_expand_extension(line, ext_m))
             elif dates_on_line:
+                # Each date's action is the text since the previous date, so
+                # "Amend claims due 6/2/26  File a demand due 12/19/26" gives
+                # two actions rather than one label swallowing the other.
+                pos = 0
                 for raw in dates_on_line:
+                    idx = line.find(raw, pos)
                     nd = _norm_date(raw)
+                    action = line[pos:idx].strip(" :;,(-\u2013") or line.strip()
+                    pos = idx + len(raw)
                     if not nd:
                         continue
-                    # action = text up to the date, tidied
-                    idx = line.find(raw)
-                    action = line[:idx].strip(" :-\u2013") or line.strip()
                     deadlines.append({"action": action, "date": nd})
             else:
                 # Undated action item, e.g. "Assignment due".
@@ -749,8 +789,21 @@ def parse_box(text, slide_num, docket_re=None):
 # --------------------------------------------------------------------------- #
 #  Shape walking
 # --------------------------------------------------------------------------- #
+# Slide titles and slide numbers never hold case data. A title such as
+# "ADC-ART-C-P3900 (Phenol imidazoles) PARP" would otherwise be read as a case
+# (docket ADC-ART-C-P3900, country PA from "PARP") and its leading token would
+# skew docket learning.
+_SKIP_PLACEHOLDERS = {1, 3, 13}   # TITLE, CENTER_TITLE, SLIDE_NUMBER
+
+
 def iter_box_texts(shape):
     """Yield text for a shape, recursing into groups."""
+    if getattr(shape, "is_placeholder", False):
+        try:
+            if int(shape.placeholder_format.type) in _SKIP_PLACEHOLDERS:
+                return
+        except Exception:
+            pass
     if shape.shape_type == 6:  # GroupShape
         for child in shape.shapes:
             yield from iter_box_texts(child)
@@ -870,6 +923,8 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
         reasons = []
         if c["docket"] and c["application_number"] and not c["country"]:
             reasons.append("country not resolved")
+        if c["country"] not in (None, "PCT") and not c["application_number"]:
+            reasons.append("no application number found")
         reasons += c.get("flags", [])
         for d in c["deadlines"]:
             for f in (d.get("flag") or "").split("; "):
