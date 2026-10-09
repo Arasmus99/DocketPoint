@@ -592,8 +592,9 @@ def _expand_extension(line, ext_m):
                 f"months after due date {base_nd} "
                 f"(expected {expected.strftime('%m/%d/%Y')})")
     elif n_months > MAX_EXT_MONTHS:
-        flag = (f"Extension runs {n_months} months past due date {base_nd}; "
-                f"more than {MAX_EXT_MONTHS} is unusual")
+        # No semicolon: case-level reasons are split on "; ".
+        flag = (f"Extension runs {n_months} months past due date {base_nd}, "
+                f"more than the usual {MAX_EXT_MONTHS}")
     if flag:
         out[0]["flag"] = flag
 
