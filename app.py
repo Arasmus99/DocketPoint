@@ -57,6 +57,9 @@ def _is_docket_ish(tok):
     """Could this leading token plausibly be a docket (not a date/app#/word)?"""
     if not tok or len(tok) < 6:
         return False
+    # A parenthesized token is an annotation, e.g. a family label "(IST-017)"
+    if tok.startswith("(") or tok.endswith(")"):
+        return False
     if _DATE_TOKEN_RE.match(tok):
         return False
     u = tok.upper()
@@ -618,7 +621,12 @@ def find_dates(lines):
     Split dates into a single filing date and a list of due-date deadlines.
 
     * A *due date* is any date that sits on a line containing 'due'/'by'.
-    * The *filing date* is the first non-due date (typically next to the app #).
+    * A date still in the future cannot be a filing date, so a future date on
+      a line without 'due'/'by' is also a deadline ("Last day 3/28/29" under
+      "11.5 yr Maint Fee"). Its label borrows the nearest text line above it,
+      and it is flagged so the reading gets checked.
+    * The *filing date* is the first other date (typically next to the app #)
+      that carries no word label; "Earliest pub is 1/22/2026" is not one.
     Returns (filing_date, [ {action, date}, ... ], [undated_action, ...],
              [flag, ...]).
     """
@@ -626,6 +634,8 @@ def find_dates(lines):
     deadlines = []
     undated = []
     flags = []
+    today = date.today()
+    context = ""      # nearest undated line of words, e.g. "11.5 yr Maint Fee"
 
     for line in lines:
         line = line.strip()
@@ -673,11 +683,26 @@ def find_dates(lines):
                     if not re.search(r"\bassignments?\b", line, re.IGNORECASE):
                         flags.append(f'"Due" with no date: "{line}"')
         else:
+            if not dates_on_line and re.search(r"[A-Za-z]{3,}", line):
+                context = line
             for raw in dates_on_line:
                 nd = _norm_date(raw)
-                if nd and filing is None:
+                if not nd:
+                    continue
+                idx = line.find(raw)
+                # A word label before the date ("Open", "Last day") marks an
+                # event, not a filing date, even after the date has passed.
+                labeled = bool(re.fullmatch(r"[^\d]*[A-Za-z]{2,}[^\d]*",
+                                            line[:idx].strip()))
+                if datetime.strptime(nd, "%m/%d/%Y").date() > today:
+                    action = line[:idx].strip(" :;,(-\u2013")
+                    if context:
+                        action = f"{context} \u2013 {action}" if action else context
+                    deadlines.append({"action": action or line, "date": nd})
+                    flags.append(f'Date with no "due" read as a deadline: '
+                                 f'"{line}"')
+                elif filing is None and not labeled:
                     filing = nd
-                    break
 
     return filing, deadlines, undated, flags
 
