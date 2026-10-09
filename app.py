@@ -669,16 +669,24 @@ def parse_box(text, slide_num, docket_re=None):
     wipo = find_wipo(raw)
 
     app_no, country = (None, None)
+    unidentified = False
     if not docket and not pct and not wipo:
         # No docket, PCT or WO number. The box is still a case when it carries
         # an application number with a jurisdiction code ("2026/06642 ZA",
         # "64/102,643 US P1"); many families on a slide have no docket at all.
-        # Titles and page chrome have neither and are skipped.
-        if not _country_from_app_line(raw):
-            return None
-        app_no, country = find_application_number(raw, None)
+        if _country_from_app_line(raw):
+            app_no, country = find_application_number(raw, None)
         if not app_no:
-            return None
+            # No identifier the app can read, whatever the cause (a typo, a
+            # number run into a date, an unfamiliar format). A box with a
+            # dated due line is kept so the deadline still reaches the
+            # calendar, labeled by the box's first line and flagged. Titles
+            # and page chrome have no dated due line and are skipped.
+            if not any(DUE_LINE_RE.search(ln) and DATE_RE.search(ln)
+                       for ln in lines):
+                return None
+            app_no, country = None, None
+            unidentified = True
     elif docket:
         app_no, country = find_application_number(raw, docket)
         if full_docket:
@@ -694,6 +702,9 @@ def parse_box(text, slide_num, docket_re=None):
         country = "PCT"
 
     filing, deadlines, undated, flags = find_dates(lines)
+    if unidentified:
+        flags = [f'No docket, application or PCT number found in box '
+                 f'beginning "{lines[0]}"'] + flags
 
     status_m = STATUS_RE.search(raw)
     status = status_m.group(0).upper() if status_m else ""
@@ -711,6 +722,8 @@ def parse_box(text, slide_num, docket_re=None):
         "undated_actions": undated,
         "flags": flags,
         "raw_text": raw,
+        # Calendar label for a box with no readable identifier.
+        "label": lines[0] if unidentified else None,
     }
 
 
@@ -865,7 +878,7 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
             # they share an action and date, while the same case drawn on two
             # slides (with or without its docket) still posts once.
             ident = (c["application_number"] or c["pct_number"]
-                     or c["wipo_number"] or c["docket"])
+                     or c["wipo_number"] or c["docket"] or c.get("label"))
             key = (client, ident, d["action"], d["date"])
             if key in seen:
                 continue
