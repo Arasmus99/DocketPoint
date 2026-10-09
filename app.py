@@ -711,9 +711,36 @@ def find_dates(lines):
 # --------------------------------------------------------------------------- #
 #  Box-level parsing
 # --------------------------------------------------------------------------- #
-def parse_box(text, slide_num, docket_re=None):
+# Family number: a box in a slide's top-right corner holding only a
+# zero-padded number ("005" in Reunion, "0001" in OYE).
+FAMILY_NO_RE = re.compile(r"0\d{2,3}")
+# A case code written in a box as the family number plus a filing suffix:
+# "(005WO)", "(007WO2)", "(009TW)", "(005USP1)".
+FAMILY_CODE_RE = re.compile(r"\(\s*(0\d{2,3})\s*([A-Z][A-Za-z0-9-]*)\s*\)")
+
+
+def slide_family_number(slide, slide_width, slide_height):
+    """Return the slide's family number, or None."""
+    for shape in slide.shapes:
+        if getattr(shape, "is_placeholder", False):
+            continue
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        if not FAMILY_NO_RE.fullmatch(shape.text.strip()):
+            continue
+        if None not in (shape.left, shape.top) and slide_width and slide_height:
+            if shape.left < slide_width / 2 or shape.top > slide_height / 4:
+                continue
+        return shape.text.strip()
+    return None
+
+
+def parse_box(text, slide_num, docket_re=None, family=None):
     """
     Return a case dict for one text box, or None if it holds no case data.
+
+    family: the slide's family number. When the box carries a code built on
+    it, such as "(005WO)", that code replaces the docket.
 
     docket_re: the per-deck docket pattern learned by detect_docket_regex().
     When it doesn't match (or isn't supplied), fall back to the built-in
@@ -791,6 +818,18 @@ def parse_box(text, slide_num, docket_re=None):
         flags = [f'No docket, application or PCT number found in box '
                  f'beginning "{lines[0]}"'] + flags
 
+    # A family code such as "(005WO)" replaces the docket when its number
+    # matches the slide's family number. A mismatch is flagged, and the
+    # docket is left as it was.
+    code_m = FAMILY_CODE_RE.search(raw)
+    if code_m and family:
+        code = code_m.group(1) + code_m.group(2)
+        if code_m.group(1) == family:
+            docket = code
+        else:
+            flags.append(f'Code "({code})" does not match family number '
+                         f'{family} on this slide')
+
     status_m = STATUS_RE.search(raw)
     status = status_m.group(0).upper() if status_m else ""
 
@@ -844,7 +883,10 @@ def extract_cases(pptx_source):
     # First pass: collect every text box so we can learn this deck's docket
     # format before extracting anything.
     box_index = []   # (slide_num, text)
+    families = {}    # slide_num -> family number
     for slide_num, slide in enumerate(prs.slides, start=1):
+        families[slide_num] = slide_family_number(
+            slide, prs.slide_width, prs.slide_height)
         for shape in slide.shapes:
             for text in iter_box_texts(shape):
                 box_index.append((slide_num, text))
@@ -854,7 +896,8 @@ def extract_cases(pptx_source):
     # Second pass: parse each box using the learned pattern.
     cases = []
     for slide_num, text in box_index:
-        case = parse_box(text, slide_num, docket_re=docket_re)
+        case = parse_box(text, slide_num, docket_re=docket_re,
+                         family=families.get(slide_num))
         if case:
             cases.append(case)
     return cases
@@ -1593,10 +1636,9 @@ if flagged:
     st.warning(f"\u26A0\uFE0F {len(flagged)} case(s) need review before relying "
                f"on the deadlines below.")
     with st.expander("Show flagged entries", expanded=True):
-        # Application Number identifies the cases flagged for having no docket.
-        st.dataframe(pd.DataFrame(flagged)[["Docket Number", "Application Number",
-                                            "PCT Number", "Country", "Slide",
-                                            "Review", "Due Dates / Actions"]],
+        st.dataframe(pd.DataFrame(flagged)[["Client", "Slide", "Country",
+                                            "Docket Number", "Review",
+                                            "Due Dates / Actions"]],
                      use_container_width=True, hide_index=True)
 
 # --- Summary metrics ------------------------------------------------------ #
