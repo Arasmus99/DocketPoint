@@ -6,6 +6,7 @@ import calendar
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from dateutil.parser import parse as parse_date
 from dateutil.relativedelta import relativedelta
 from pptx import Presentation
@@ -115,25 +116,27 @@ def detect_docket_regex(box_texts):
             if n >= threshold and _sig_is_docket_shaped(s)]
 
     # Two-group all-numeric dockets (Foley: 145737-0107) abstract to '#-#',
-    # which _sig_is_docket_shaped() rejects because a Japanese serial
-    # (2016-502307) has the same shape. Accept '#-#' only when it is the
-    # deck's dominant leading signature, and pin the regex to the digit widths
-    # actually observed, excluding any width that is a known application-number
-    # format. Pinned widths keep a JP serial that leads a box from being
-    # mistaken for a docket.
+    # which _sig_is_docket_shaped() rejects because a Japanese or Venezuelan
+    # serial (2016-502307, 000115-2015) has the same shape. Accept '#-#' only
+    # when it is the deck's dominant leading signature, and pin the regex to
+    # the digit widths of tokens that stand alone on their line. A serial
+    # always shares its line with a country code ("2016-502307  JP"), so it
+    # never contributes a width.
     numeric_res = []
     top_sig, top_n = sigs.most_common(1)[0]
     if top_sig == "#-#" and top_n >= threshold:
         widths = set()
-        for c in cands:
-            if _signature(c) != "#-#":
+        for b in box_texts:
+            tok = _first_token(b)
+            if not _is_docket_ish(tok) or _signature(tok) != "#-#":
                 continue
-            if any(rx.fullmatch(c) for rx in COUNTRY_APP_RES.values()):
+            first_line = b.splitlines()[0].strip()
+            if first_line != tok:
                 continue
-            a, b = c.split("-")
-            widths.add((len(a), len(b)))
-        for a, b in sorted(widths, key=lambda w: sum(w), reverse=True):
-            numeric_res.append(r"\d{%d}-\d{%d}(?!\d)" % (a, b))
+            a, c = tok.split("-")
+            widths.add((len(a), len(c)))
+        for a, c in sorted(widths, key=lambda w: sum(w), reverse=True):
+            numeric_res.append(r"\d{%d}-\d{%d}(?!\d)" % (a, c))
         if numeric_res:
             keep.append(top_sig)
 
@@ -200,8 +203,12 @@ DOCKET_RE = re.compile(
 CLIENT_CODE_RES = [
     re.compile(r"\b\d{4,5}-\d{3}[A-Za-z][A-Za-z0-9-]*"),   # 15080-101EP1, 15040-004CN2-MO
     re.compile(r"\b\d{3}[A-Z]{2,3}P?\d*\b"),               # 107USP1, 107USP2
-    re.compile(r"\b\d{6}-\d{3,5}\b"),                      # 145737-0107, 107688-00010
 ]
+
+# A line holding nothing but a two-part numeric docket (Foley 145737-0107, or a
+# second firm's 107688-00010 under it). Stripped whole-line only: a Venezuelan
+# serial has the same shape (000115-2015) but always shares its line with VE.
+DOCKET_LINE_RE = re.compile(r"^[ \t]*\d{6}-\d{3,5}[ \t]*$", re.MULTILINE)
 
 
 # --------------------------------------------------------------------------- #
@@ -229,12 +236,14 @@ COUNTRY_APP_RES = {
     "HK": re.compile(r"(?<!\d)\d{8,11}\.\d(?!\d)"),       # 17113734.5 / 62024096696.5
     "BR": re.compile(r"BR[\d\s]+?\.\d"),                  # BR112017005111.7 / BR 12 2022 023284.1
     "MO": re.compile(r"\bJ/\d+\b"),                       # J/008517 (Macau)
+    "VE": re.compile(r"\b\d{6}-\d{4}\b"),                 # 000115-2015
+    "PH": re.compile(r"\b1-\d{4}-\d{6}\b"),               # 1-2006-501916
 }
 
 # Order used for the "try everything" fallback when the docket country is
 # unknown or its pattern misses. More-specific patterns come first so they win.
 FALLBACK_ORDER = [
-    "MX", "CO", "AR", "BR", "KR", "ZA", "SG", "US", "MO",
+    "MX", "CO", "AR", "BR", "PH", "KR", "VE", "ZA", "SG", "US", "MO",
     "CN", "HK", "EP", "JP", "IN", "AU", "TW", "CA", "IL", "NZ",
 ]
 
@@ -350,6 +359,7 @@ def _strip_known_tokens(text, docket):
         out = out.replace(docket, " ")
     for rx in CLIENT_CODE_RES:
         out = rx.sub(" ", out)
+    out = DOCKET_LINE_RE.sub(" ", out)
     return out
 
 
@@ -416,7 +426,7 @@ def _appno_before_country(text, docket):
     """
     for line in text.splitlines():
         line = line.rstrip()
-        m = re.search(r"([A-Za-z]{0,2}\d[\dA-Za-z,./\-]*)\s+([A-Z]{2})\s*$", line)
+        m = re.search(r"(?<![A-Za-z0-9])([A-Za-z]{0,3}\d[\dA-Za-z,./\-]*)\s+([A-Z]{2})\s*$", line)
         if m and m.group(2) in KNOWN_COUNTRIES:
             token = m.group(1)
             if docket and token in docket:
@@ -600,7 +610,11 @@ def find_dates(lines):
                 # date (common in narrative notes) isn't logged as an action.
                 if re.search(r"\bdue\b", line, re.IGNORECASE):
                     undated.append(line)
-                    flags.append(f'"Due" with no date: "{line}"')
+                    # Assignment lines never carry a date on these slides
+                    # ("Assignment due", "Dec & Assignments due"); still listed
+                    # as an action, but not flagged for review.
+                    if not re.search(r"\bassignments?\b", line, re.IGNORECASE):
+                        flags.append(f'"Due" with no date: "{line}"')
         else:
             for raw in dates_on_line:
                 nd = _norm_date(raw)
@@ -654,12 +668,18 @@ def parse_box(text, slide_num, docket_re=None):
     pct = find_pct(raw)
     wipo = find_wipo(raw)
 
-    # Skip boxes that have no identifiers at all (titles, page numbers, etc.)
-    if not docket and not pct and not wipo:
-        return None
-
     app_no, country = (None, None)
-    if docket:
+    if not docket and not pct and not wipo:
+        # No docket, PCT or WO number. The box is still a case when it carries
+        # an application number with a jurisdiction code ("2026/06642 ZA",
+        # "64/102,643 US P1"); many families on a slide have no docket at all.
+        # Titles and page chrome have neither and are skipped.
+        if not _country_from_app_line(raw):
+            return None
+        app_no, country = find_application_number(raw, None)
+        if not app_no:
+            return None
+    elif docket:
         app_no, country = find_application_number(raw, docket)
         if full_docket:
             docket = full_docket
@@ -840,12 +860,13 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
             "Due Dates / Actions": _join_deadlines(c),
         })
         for d in c["deadlines"]:
-            # Key on the case identifier as well as the docket: a box with no
-            # docket (docket None) must not collapse into another undocketed
-            # box that happens to carry the same action and date.
+            # Key on the case identifier, falling back to the docket: two
+            # undocketed boxes for different cases must not collapse because
+            # they share an action and date, while the same case drawn on two
+            # slides (with or without its docket) still posts once.
             ident = (c["application_number"] or c["pct_number"]
-                     or c["wipo_number"])
-            key = (client, c["docket"], ident, d["action"], d["date"])
+                     or c["wipo_number"] or c["docket"])
+            key = (client, ident, d["action"], d["date"])
             if key in seen:
                 continue
             seen.add(key)
@@ -853,7 +874,10 @@ def cases_to_rows(cases, client, deadline_cutoff=None):
                 "Review": d.get("flag", ""),
                 "Due Date": d["date"],
                 "Action": d["action"],
-                "Docket Number": c["docket"],
+                # No docket on the slide: label the deadline with the
+                # application (or PCT/WO) number so the calendar and Deadlines
+                # sheet still identify the case.
+                "Docket Number": c["docket"] or ident,
                 "Country": c["country"],
                 "Application Number": c["application_number"]
                                       or c["pct_number"] or c["wipo_number"],
@@ -1292,6 +1316,36 @@ st.markdown("""
   }
   #dp-tagline { color:#5a6b85; font-size:14px; margin:0 0 1.1rem 2px; }
   div[data-testid="stFileUploader"] section { border-radius:10px; }
+
+  /* Page-wide drop target. While a file is dragged over the window, the
+     script injected beside the uploader adds .dp-dragging to <body>, and the
+     uploader's own drop zone expands to cover the viewport, so a drop
+     anywhere lands on it. */
+  body.dp-dragging [data-testid="stFileUploaderDropzone"],
+  body.dp-dragging [data-testid="stFileUploadDropzone"] {
+    position:fixed !important; inset:0 !important; z-index:1000000 !important;
+    margin:0 !important; border-radius:0 !important;
+    background:rgba(31,56,100,.90) !important;
+    border:4px dashed #fff !important;
+  }
+  body.dp-dragging [data-testid="stFileUploaderDropzone"] > *,
+  body.dp-dragging [data-testid="stFileUploadDropzone"] > * {
+    visibility:hidden;
+  }
+  body.dp-dragging [data-testid="stFileUploaderDropzone"] *,
+  body.dp-dragging [data-testid="stFileUploadDropzone"] * {
+    pointer-events:none;
+  }
+  body.dp-dragging [data-testid="stFileUploaderDropzone"]::after,
+  body.dp-dragging [data-testid="stFileUploadDropzone"]::after {
+    content:"Drop .pptx files to upload";
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    color:#fff; font-size:28px; font-weight:700; letter-spacing:-.3px;
+  }
+  /* The zero-height iframe that carries the drag script takes no space. */
+  div[data-testid="stElementContainer"]:has(> iframe[title="st.iframe"]),
+  div[data-testid="stElementContainer"]:has(iframe[height="0"]),
+  div.element-container:has(iframe[height="0"]) { display:none; }
   .stTabs [data-baseweb="tab-list"] { gap: 4px; }
   .stTabs [data-baseweb="tab"] { font-weight:600; }
   div[data-testid="stMetricValue"] { color:var(--dp-navy); }
@@ -1321,7 +1375,7 @@ with st.sidebar:
     )
     st.markdown("### How to use")
     st.markdown(
-        "1. Upload one or more `.pptx` decks.\n"
+        "1. Drag one or more `.pptx` decks anywhere onto the page.\n"
         "2. Review the **Deadlines**, **All Cases**, and **Calendar** tabs.\n"
         "3. Download the Excel workbook or a printable PDF calendar."
     )
@@ -1338,10 +1392,44 @@ with st.sidebar:
 
 # --- Inputs --------------------------------------------------------------- #
 ppt_files = st.file_uploader(
-    "Upload case-structure PowerPoint files (.pptx)",
+    "Upload case-structure PowerPoint files (.pptx), or drop them anywhere "
+    "on this page",
     type="pptx",
     accept_multiple_files=True,
 )
+
+# Page-wide drag-and-drop. The script runs in a same-origin component iframe
+# and works on the parent page: it toggles .dp-dragging on <body> while files
+# are dragged over the window (the CSS above then expands the uploader's drop
+# zone to full screen), and it stops the browser from opening a file dropped
+# outside the zone. Installed once per page load; reruns skip it.
+components.html("""
+<script>
+(function () {
+  const w = window.parent, doc = w.document;
+  if (w.__dpPageDrop) return;
+  w.__dpPageDrop = true;
+  const hasFiles = e => !!(e.dataTransfer &&
+      Array.from(e.dataTransfer.types || []).includes("Files"));
+  let depth = 0;
+  const off = () => { depth = 0; doc.body.classList.remove("dp-dragging"); };
+  doc.addEventListener("dragenter", e => {
+    if (!hasFiles(e)) return;
+    depth += 1;
+    doc.body.classList.add("dp-dragging");
+  }, true);
+  doc.addEventListener("dragleave", e => {
+    if (!hasFiles(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) off();
+  }, true);
+  doc.addEventListener("drop", () => setTimeout(off, 0), true);
+  w.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+  w.addEventListener("drop", e => { if (hasFiles(e)) e.preventDefault(); });
+  w.addEventListener("dragend", off);
+})();
+</script>
+""", height=0)
 
 months_back = st.slider(
     "Include deadlines due up to this many months in the past",
@@ -1350,7 +1438,7 @@ months_back = st.slider(
 )
 
 if not ppt_files:
-    st.info("Upload a case-structure deck (.pptx) to begin.")
+    st.info("Drop a case-structure deck (.pptx) anywhere on the page to begin.")
     st.stop()
 
 cutoff = date.today() - timedelta(days=int(30.4 * months_back))
@@ -1388,8 +1476,10 @@ if flagged:
     st.warning(f"\u26A0\uFE0F {len(flagged)} case(s) need review before relying "
                f"on the deadlines below.")
     with st.expander("Show flagged entries", expanded=True):
-        st.dataframe(pd.DataFrame(flagged)[["Docket Number", "Slide", "Review",
-                                            "Due Dates / Actions"]],
+        # Application Number identifies the cases flagged for having no docket.
+        st.dataframe(pd.DataFrame(flagged)[["Docket Number", "Application Number",
+                                            "PCT Number", "Country", "Slide",
+                                            "Review", "Due Dates / Actions"]],
                      use_container_width=True, hide_index=True)
 
 # --- Summary metrics ------------------------------------------------------ #
