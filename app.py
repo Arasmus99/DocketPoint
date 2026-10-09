@@ -217,7 +217,7 @@ DOCKET_LINE_RE = re.compile(r"^[ \t]*\d{6}-\d{3,5}[ \t]*$", re.MULTILINE)
 COUNTRY_APP_RES = {
     "US": re.compile(r"\b\d{2}/\d{3},?\d{3}\b"),          # 61/793,993 ; 14/211,002
     "EP": re.compile(r"\b\d{8}\.\d\b"),                   # 14764430.6
-    "JP": re.compile(r"\b\d{4}-\d{6}\b"),                 # 2016-502307
+    "JP": re.compile(r"\b\d{4}\s*[-\u2013\u2014]\s*\d{6}\b"),   # 2016-502307 ; 2023 \u2013 526861
     "KR": re.compile(r"\b10-\d{4}-\d{7}\b"),              # 10-2017-7008850
     "CN": re.compile(r"(?<!\d)\d{12}\.\s?[\dX](?!\d)"),   # 201580054350.9 / .X / ZL-prefixed
     "IN": re.compile(r"\b\d{12}\b"),                      # 201747008733
@@ -234,7 +234,8 @@ COUNTRY_APP_RES = {
     "CO": re.compile(r"\bNC\d{4}/\d{6}\b"),               # NC2025/001854
     "AR": re.compile(r"\bP\d{9}\b"),                      # P230101911
     "HK": re.compile(r"(?<!\d)\d{8,11}\.\d(?!\d)"),       # 17113734.5 / 62024096696.5
-    "BR": re.compile(r"BR[\d\s]+?\.\d"),                  # BR112017005111.7 / BR 12 2022 023284.1
+    "BR": re.compile(r"BR[\d\s]+?\.\d"                   # BR112017005111.7 / BR 12 2022 023284.1
+                     r"|\b1[0-2]\s?\d{4}\s?\d{6}\s?\d\b"),     # 11 2023 008218 8 / 1120160180771
     "MO": re.compile(r"\bJ/\d+\b"),                       # J/008517 (Macau)
     "VE": re.compile(r"\b\d{6}-\d{4}\b"),                 # 000115-2015
     "PH": re.compile(r"\b1-\d{4}-\d{6}\b"),               # 1-2006-501916
@@ -247,9 +248,13 @@ FALLBACK_ORDER = [
     "CN", "HK", "EP", "JP", "IN", "AU", "TW", "CA", "IL", "NZ",
 ]
 
-PCT_RE = re.compile(r"\bPCT/[A-Z]{2}\d{4}/\d{5,6}\b")
+# PCT/US2019/042715, and the shorthand with a two-digit year, PCT/US20/65957
+PCT_RE = re.compile(r"\bPCT/[A-Z]{2}(?:\d{4}|\d{2})/\d{5,6}\b")
 # WO2014/143643 ; WO2024020127 (no slash) ; WO 2025/160227 A1
 WIPO_RE = re.compile(r"\bWO\s?\d{4}/?\d{6}(?:\s?A\d)?\b")
+
+# A US serial with no country code beside it, e.g. a provisional "61/483,476"
+US_SERIAL_RE = re.compile(r"\b\d{2}/\d{3},\d{3}\b")
 
 # US grant numbers like 9,629,860 / 10,195,222 (used for the bonus "patent no." column)
 US_GRANT_RE = re.compile(r"\b\d{1,2},\d{3},\d{3}\b")
@@ -258,7 +263,11 @@ DATE_RE = re.compile(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b")
 # A date missing its second separator ("11/1526", "1/727"). DATE_RE skips it,
 # so without a flag the deadline is silently lost or mislabeled. The
 # lookarounds keep US serials (63/109,095) and longer numbers out.
-MALFORMED_DATE_RE = re.compile(r"(?<![\d/])\d{1,2}/\d{3,4}(?![\d,/])")
+MALFORMED_DATE_RE = re.compile(
+    r"(?<![\d/])\d{1,2}/\d{3,4}(?![\d,/])"                      # 11/1526
+    r"|(?<![\d/])\d{1,2}(?://|--|/-|-/|[/-])\d{1,2}(?://|--|/-|-/)\d{2,4}(?![\d/])"
+    r"|(?<![\d/])\d{1,2}(?://|--|/-|-/)\d{1,2}[/-]\d{2,4}(?![\d/])"  # 1/14//26
+)
 DUE_LINE_RE = re.compile(r"\b(due|by)\b", re.IGNORECASE)
 
 # "w/ext up to 2/11/27", "w/ ext. to 2/11/27", "with extension through 2/11/27"
@@ -344,7 +353,13 @@ def get_country(docket, text=""):
          infer US, since that format is unambiguously a US application.
     Normalizes EU -> EP since both denote a European application here.
     """
-    country = _country_from_app_line(text) or _country_from_docket_suffix(docket)
+    suffix = _country_from_docket_suffix(docket)
+    # A docket suffix like "-PRO" (provisional) names a filing type, not a
+    # jurisdiction. Country codes have two letters; PCT and WO are the only
+    # longer suffixes that identify where a case was filed.
+    if suffix and len(suffix) != 2 and suffix not in ("PCT", "WO"):
+        suffix = None
+    country = _country_from_app_line(text) or suffix
     if country is None and re.search(r"\b\d{2}/\d{3},\d{3}\b", text):
         country = "US"
     if country == "EU":
@@ -367,6 +382,8 @@ def _clean_match(value):
     if value is None:
         return None
     # collapse internal whitespace (e.g. CN "201580054350. 9" -> "201580054350.9")
+    # and normalize en/em dashes (JP "2023 \u2013 526861" -> "2023-526861")
+    value = re.sub(r"[\u2013\u2014]", "-", value)
     return re.sub(r"\s+", "", value.strip())
 
 
@@ -657,7 +674,9 @@ def parse_box(text, slide_num, docket_re=None):
             # as the docket so distinct sub-cases stay distinct, but resolve
             # the country from the matched core, as before.
             rest = ft[len(docket):]
-            if rest and re.fullmatch(r"(?:-[A-Za-z0-9]+)+", rest):
+            # Also a continuation of the last segment: 0496.0009-PRO2,
+            # 0496.0002-PCT-SAD1, where the pattern stops at the letters.
+            if rest and re.fullmatch(r"[A-Za-z0-9]*(?:-[A-Za-z0-9]+)*", rest):
                 full_docket = ft
     # 2) Fallback: the built-in multi-format pattern, searched anywhere.
     if docket is None:
@@ -674,7 +693,7 @@ def parse_box(text, slide_num, docket_re=None):
         # No docket, PCT or WO number. The box is still a case when it carries
         # an application number with a jurisdiction code ("2026/06642 ZA",
         # "64/102,643 US P1"); many families on a slide have no docket at all.
-        if _country_from_app_line(raw):
+        if _country_from_app_line(raw) or US_SERIAL_RE.search(raw):
             app_no, country = find_application_number(raw, None)
         if not app_no:
             # No identifier the app can read, whatever the cause (a typo, a
